@@ -7,9 +7,10 @@ import numpy as np
 from config import ENVIRONMENT_CONFIG, CAR_CONFIG, PEDESTRIAN_CONFIG, ENVIRONMENT_OBJECTS, TRAFFIC_LIGHT_CONFIG
 
 class CrossroadEnvironment:
-    def __init__(self):
+    def __init__(self, connection_mode=p.GUI):
         # Connect to PyBullet GUI
-        self.physicsClient = p.connect(p.GUI)
+        self.physicsClient = p.connect(connection_mode)
+
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, -9.8)
         
