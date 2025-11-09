@@ -23,6 +23,13 @@ def run_rl_demo():
     demo = RLCrossroadDemo()
     demo.run_demo()
 
+def run_agent_demo():
+    """Run agent control demonstration"""
+    print("🚶 Starting Agent Control Demo...")
+    from demo_agent_control import demo_random_agent
+    
+    demo_random_agent()
+
 def run_tests():
     """Run environment tests"""
     print("🧪 Running Environment Tests...")
@@ -37,14 +44,15 @@ def main():
         epilog="""
 Examples:
   python launcher.py basic           # Run basic simulation
-  python launcher.py rl-demo         # Run RL demonstration  
+  python launcher.py rl-demo         # Run RL demonstration
+  python launcher.py agent-demo      # Run agent control demo (see pedestrian move)
   python launcher.py test            # Run tests
         """
     )
     
     parser.add_argument(
         'mode',
-        choices=['basic', 'rl-demo', 'test'],
+        choices=['basic', 'rl-demo', 'test', 'agent-demo'],
         help='Simulation mode to run'
     )
     
@@ -56,12 +64,13 @@ Examples:
         print("="*50)
         print("1. Basic Simulation")
         print("2. RL Demo")
-        print("3. Run Tests")
-        print("4. Exit")
+        print("3. Agent Control Demo (see pedestrian move)")
+        print("4. Run Tests")
+        print("5. Exit")
         
         while True:
             try:
-                choice = input("\nSelect mode (1-4): ").strip()
+                choice = input("\nSelect mode (1-5): ").strip()
                 if choice == '1':
                     run_basic_simulation()
                     break
@@ -69,12 +78,15 @@ Examples:
                     run_rl_demo()
                     break
                 elif choice == '3':
-                    return run_tests()
+                    run_agent_demo()
+                    break
                 elif choice == '4':
+                    return run_tests()
+                elif choice == '5':
                     print("Goodbye! 👋")
                     return 0
                 else:
-                    print("Invalid choice. Please select 1-4.")
+                    print("Invalid choice. Please select 1-5.")
             except KeyboardInterrupt:
                 print("\nGoodbye! 👋")
                 return 0
@@ -90,6 +102,8 @@ Examples:
             run_basic_simulation()
         elif args.mode == 'rl-demo':
             run_rl_demo()
+        elif args.mode == 'agent-demo':
+            run_agent_demo()
         elif args.mode == 'test':
             return run_tests()
     

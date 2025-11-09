@@ -106,9 +106,9 @@ TRAFFIC_LIGHT_CONFIG = {
     }
 }
 
-# RL Training Settings (for future use)
+# RL Training Settings
 RL_CONFIG = {
-    'state_space_size': 20,  # Will be calculated based on actual state
+    'state_space_size': 16,  # Observation space dimension (4 agent + 2 target + 4 traffic lights + 6 cars)
     'action_space_size': 5,  # 0=stay, 1=forward, 2=back, 3=left, 4=right
     'max_episode_steps': 1000,
     'reward_structure': {
@@ -116,5 +116,18 @@ RL_CONFIG = {
         'collision_penalty': -100,
         'time_penalty': -0.1,
         'safe_crossing_bonus': 50,
-    }
+    },
+    # DQN Hyperparameters
+    'learning_rate': 0.001,
+    'gamma': 0.99,  # Discount factor
+    'epsilon_start': 1.0,  # Initial exploration rate
+    'epsilon_end': 0.01,  # Final exploration rate
+    'epsilon_decay': 0.995,  # Exploration decay rate
+    'batch_size': 64,
+    'replay_buffer_size': 10000,
+    'target_update_frequency': 100,  # Update target network every N steps
+    'train_frequency': 4,  # Train every N steps
+    'min_replay_size': 1000,  # Minimum experiences before training
+    # Neural Network Architecture
+    'hidden_layers': [128, 128],  # Hidden layer sizes
 }

@@ -1,8 +1,9 @@
 # gym_crossroad_env.py
 import gymnasium as gym
-from gym import spaces
+from gymnasium import spaces
 import numpy as np
 import pybullet as p
+import pybullet_data
 import time
 import random
 from intersection_env import CrossroadEnvironment as BaseCrossroad  # your file
@@ -15,7 +16,7 @@ class CrossroadGymEnv(gym.Env):
     Discrete actions: 0=stay, 1=forward, 2=back, 3=left, 4=right
     Observation: compact numeric vector (see below)
     """
-    metadata = {"render.modes": ["human"]}
+    metadata = {"render_modes": ["human"], "render_fps": 60}
 
     def __init__(self, gui=False, max_steps=None):
         super().__init__()
@@ -46,32 +47,27 @@ class CrossroadGymEnv(gym.Env):
         self._last_collision = False
 
     def _init_pybullet(self):
-        # connect pybullet
-        if hasattr(p, 'disconnect_all'):
-            try:
-                p.disconnect()
-            except Exception:
-                pass
-        if self.gui:
-            self.physics_client = p.connect(p.GUI)
-        else:
-            self.physics_client = p.connect(p.DIRECT)
-
-        p.setAdditionalSearchPath("pybullet_data")
-        p.setGravity(0, 0, -9.8)
-        # Use parts of your existing env code to set up scene.
-        # For simplicity, instantiate your existing class but override its pybullet connection.
-        # If BaseCrossroad always connects in GUI, modify it to accept a mode parameter (recommended).
-        # Here we'll import and create it (assumes BaseCrossroad uses p.connect at top).
-        # If needed, adapt BaseCrossroad to accept 'connection_mode' parameter.
+        # Disconnect any existing connections
+        try:
+            p.disconnect()
+        except Exception:
+            pass
+        
+        # The base environment will handle the pybullet connection
+        # Create base environment which connects to pybullet
         self.base_env = BaseCrossroad(connection_mode=self._p_connection_mode)
+        self.physics_client = self.base_env.physicsClient
+        
         # Now make pedestrian controllable: store body id
         self.ped_body_id = self.base_env.pedestrian['torso']
         self.target_pos = PEDESTRIAN_CONFIG.get('target_position', [2.5, 3.5, 0.6])
 
     def seed(self, seed=None):
-        self.np_random, seed = gym.utils.seeding.np_random(seed)
-        random.seed(seed)
+        # Gymnasium uses np_random from numpy's random generator
+        if seed is not None:
+            np.random.seed(seed)
+            random.seed(seed)
+        self.np_random = np.random
         return [seed]
 
     def _get_obs(self):
@@ -81,8 +77,8 @@ class CrossroadGymEnv(gym.Env):
         agent_x, agent_y = pos[0], pos[1]
         agent_vx, agent_vy = lin_vel[0], lin_vel[1]
 
-        # Target
-        target_x, target_y = self.base_env.pedestrian['position'][0], self.base_env.pedestrian['position'][1]
+        # Target (from config, not from base_env which uses start position)
+        target_x, target_y = self.target_pos[0], self.target_pos[1]
 
         # Traffic lights (map GREEN/YELLOW/RED -> numeric)
         mapping = {"GREEN": 1.0, "YELLOW": 0.5, "RED": 0.0}
@@ -135,10 +131,15 @@ class CrossroadGymEnv(gym.Env):
             dx = step_size
         # action==0 -> stay
 
-        # Move the pedestrian
+        # Move the pedestrian (body and head)
         pos, orn = p.getBasePositionAndOrientation(self.ped_body_id)
         new_pos = [pos[0] + dx, pos[1] + dy, pos[2]]
         p.resetBasePositionAndOrientation(self.ped_body_id, new_pos, orn)
+        
+        # Also move the head to stay above the body
+        if 'head' in self.base_env.pedestrian:
+            head_pos = [new_pos[0], new_pos[1], new_pos[2] + 0.8]  # Head is 0.8m above body
+            p.resetBasePositionAndOrientation(self.base_env.pedestrian['head'], head_pos, orn)
 
         # Step the base env: update cars/traffic lights etc. (reuse your update functions)
         self.base_env.update_traffic_lights()
@@ -167,8 +168,8 @@ class CrossroadGymEnv(gym.Env):
 
             # check reach target (distance threshold)
             agent_pos, _ = p.getBasePositionAndOrientation(self.ped_body_id)
-            dist_to_target = math.hypot(agent_pos[0] - self.base_env.pedestrian['position'][0],
-                                        agent_pos[1] - self.base_env.pedestrian['position'][1])
+            dist_to_target = math.hypot(agent_pos[0] - self.target_pos[0],
+                                        agent_pos[1] - self.target_pos[1])
             if dist_to_target < 0.5:
                 reward += RL_CONFIG['reward_structure'].get('reach_target', 100)
                 done = True
@@ -180,22 +181,39 @@ class CrossroadGymEnv(gym.Env):
             info['timeout'] = True
 
         obs = self._get_obs()
-        return obs, float(reward), done, info
+        # Gymnasium API: return (obs, reward, terminated, truncated, info)
+        terminated = done
+        truncated = False
+        return obs, float(reward), terminated, truncated, info
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         # Reset pybullet world and re-create the base environment
+        if seed is not None:
+            self.seed(seed)
+        
+        # Disconnect and recreate everything
         try:
-            p.resetSimulation()
+            p.disconnect()
         except Exception:
             pass
+        
         self._init_pybullet()
         self.step_count = 0
         self._last_collision = False
-        # place pedestrian at start (use config)
-        start = self.base_env.pedestrian['position']
-        p.resetBasePositionAndOrientation(self.ped_body_id, start, [0, 0, 0, 1])
-        # return initial observation
-        return self._get_obs()
+        
+        # Get start position from config
+        start_pos = PEDESTRIAN_CONFIG.get('start_position', [-2.5, 3.5, 0.6])
+        p.resetBasePositionAndOrientation(self.ped_body_id, start_pos, [0, 0, 0, 1])
+        
+        # Also reset head position if it exists
+        if 'head' in self.base_env.pedestrian:
+            head_pos = [start_pos[0], start_pos[1], start_pos[2] + 0.8]
+            p.resetBasePositionAndOrientation(self.base_env.pedestrian['head'], head_pos, [0, 0, 0, 1])
+        
+        # return initial observation and info (gymnasium API)
+        obs = self._get_obs()
+        info = {}
+        return obs, info
 
     def render(self, mode="human"):
         # If GUI connected, pybullet GUI already shows scene. For headless, could return an image (not implemented).
