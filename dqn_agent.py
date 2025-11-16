@@ -97,7 +97,7 @@ class DQNAgent:
         
         # Epsilon-greedy action selection
         if training and random.random() < self.epsilon:
-            return random.choice(np.arange(self.action_size))
+            return random.randrange(self.action_size)
         
         self.qnetwork_local.eval()
         with torch.no_grad():
@@ -147,9 +147,9 @@ class DQNAgent:
         # Convert to tensors
         states = torch.from_numpy(states).float().to(self.device)
         actions = torch.from_numpy(actions).long().to(self.device)
-        rewards = torch.from_numpy(rewards).float().to(self.device)
+        rewards = torch.from_numpy(rewards).float().unsqueeze(1).to(self.device)
         next_states = torch.from_numpy(next_states).float().to(self.device)
-        dones = torch.from_numpy(dones).float().to(self.device)
+        dones = torch.from_numpy(dones).float().unsqueeze(1).to(self.device)
         
         # Get max predicted Q values (for next states) from target model
         Q_targets_next = self.qnetwork_target(next_states).detach().max(1)[0].unsqueeze(1)

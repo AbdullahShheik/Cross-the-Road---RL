@@ -22,16 +22,23 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=1000):
     """
     # Initialize environment
     print("Initializing environment...")
+    if gui:
+        print("  GUI mode enabled - PyBullet window should open...")
     env = CrossroadGymEnv(gui=gui, max_steps=max_steps)
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
+    print(f"  Environment initialized: State size={state_size}, Action size={action_size}")
     
     # Initialize agent and load model
+    print(f"Loading model from {model_path}...")
     agent = DQNAgent(state_size, action_size)
     agent.epsilon = 0.0  # No exploration during evaluation
     agent.load(model_path)
+    print("  Model loaded successfully!")
     
-    print(f"Evaluating agent for {num_episodes} episodes...")
+    print(f"\nEvaluating agent for {num_episodes} episodes...")
+    if gui:
+        print("  Watch the PyBullet window to see the agent in action!")
     print("-" * 50)
     
     episode_scores = []

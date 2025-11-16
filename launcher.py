@@ -30,6 +30,46 @@ def run_agent_demo():
     
     demo_random_agent()
 
+def run_trained_agent():
+    """Run trained agent demonstration"""
+    import os
+    model_path = 'models/dqn_model_final.pth'
+    
+    if not os.path.exists(model_path):
+        print(f"❌ Error: Trained model not found at {model_path}")
+        print("Please train the agent first using:")
+        print("  python train_agent.py --episodes 50")
+        return 1
+    
+    print("=" * 60)
+    print("🤖 Starting Trained Agent Demo...")
+    print("=" * 60)
+    print(f"Loading model from: {model_path}")
+    print("A PyBullet window should open showing the simulation.")
+    print("Watch the trained agent (pedestrian) cross the road!")
+    print("Press Ctrl+C in the terminal to stop.")
+    print("=" * 60)
+    print()
+    
+    try:
+        from evaluate_agent import evaluate_agent
+        
+        evaluate_agent(
+            model_path=model_path,
+            num_episodes=10,
+            gui=True,
+            max_steps=1000
+        )
+        return 0
+    except KeyboardInterrupt:
+        print("\n\nDemo stopped by user.")
+        return 0
+    except Exception as e:
+        print(f"\n❌ Error running trained agent: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
 def run_tests():
     """Run environment tests"""
     print("🧪 Running Environment Tests...")
@@ -46,13 +86,14 @@ Examples:
   python launcher.py basic           # Run basic simulation
   python launcher.py rl-demo         # Run RL demonstration
   python launcher.py agent-demo      # Run agent control demo (see pedestrian move)
+  python launcher.py trained-agent   # Run trained agent (requires trained model)
   python launcher.py test            # Run tests
         """
     )
     
     parser.add_argument(
         'mode',
-        choices=['basic', 'rl-demo', 'test', 'agent-demo'],
+        choices=['basic', 'rl-demo', 'test', 'agent-demo', 'trained-agent'],
         help='Simulation mode to run'
     )
     
@@ -65,12 +106,13 @@ Examples:
         print("1. Basic Simulation")
         print("2. RL Demo")
         print("3. Agent Control Demo (see pedestrian move)")
-        print("4. Run Tests")
-        print("5. Exit")
+        print("4. Trained Agent Demo (see trained model in action)")
+        print("5. Run Tests")
+        print("6. Exit")
         
         while True:
             try:
-                choice = input("\nSelect mode (1-5): ").strip()
+                choice = input("\nSelect mode (1-6): ").strip()
                 if choice == '1':
                     run_basic_simulation()
                     break
@@ -81,12 +123,14 @@ Examples:
                     run_agent_demo()
                     break
                 elif choice == '4':
-                    return run_tests()
+                    return run_trained_agent()
                 elif choice == '5':
+                    return run_tests()
+                elif choice == '6':
                     print("Goodbye! 👋")
                     return 0
                 else:
-                    print("Invalid choice. Please select 1-5.")
+                    print("Invalid choice. Please select 1-6.")
             except KeyboardInterrupt:
                 print("\nGoodbye! 👋")
                 return 0
@@ -104,6 +148,8 @@ Examples:
             run_rl_demo()
         elif args.mode == 'agent-demo':
             run_agent_demo()
+        elif args.mode == 'trained-agent':
+            return run_trained_agent()
         elif args.mode == 'test':
             return run_tests()
     
