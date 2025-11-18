@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 import os
 from datetime import datetime
+import time
 
 from gym_crossroad_env import CrossroadGymEnv
 from dqn_agent import DQNAgent
@@ -75,6 +76,9 @@ def train_agent(
             next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             
+            if gui:
+                time.sleep(0.05)
+
             # Store experience and learn
             agent.step(state, action, reward, next_state, done, replay_buffer, batch_size)
             

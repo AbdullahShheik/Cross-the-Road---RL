@@ -31,12 +31,24 @@ class CrossroadEnvironment:
         self.cars = []
         self.traffic_lights = []
         self.pedestrian = None
+        self.car_counter = 0
+        self.removed_cars = set()
         
         # Traffic light states
         self.signal_states = {"north": "RED", "south": "RED", "east": "GREEN", "west": "GREEN"}
+        self.active_axis = "EW"  # East-West starts green
+        self.yellow_axis = None
+        # Map each traffic direction to the signal that faces it
+        self.direction_signal_map = {
+            "north": "south",  # Cars heading north see the south-facing light
+            "south": "north",
+            "east": "west",
+            "west": "east"
+        }
         self.signal_change_timer = 0
-        self.signal_change_interval = 240  # Increased for better observation (4 seconds)
-        self.yellow_light_duration = 40  # Yellow light duration
+        steps_per_second = 60  # Assuming 60 simulation steps per second
+        self.signal_change_interval = 5 * steps_per_second  # 5 seconds for green phases
+        self.yellow_light_duration = int(0.5 * steps_per_second)  # 0.5-second yellow lights
         self.in_yellow_phase = False
         self.yellow_timer = 0
         
@@ -315,17 +327,17 @@ class CrossroadEnvironment:
         """Spawn cars on different lanes with better spacing"""
         car_spawn_data = [
             # [x, y, z, orientation, lane_direction, color, rule_breaker]
-            [-1.2, -15, 0.3, 1.57, "north", [1, 0, 0, 1], random.random() < 0.25],      # Red car
-            [-1.2, -10, 0.3, 1.57, "north", [0.8, 0.4, 0, 1], random.random() < 0.25],  # Orange car
+            [-1.2, -15, 0.3, 1.57, "north", [1, 0, 0, 1], random.random() < 0.30],      # Red car
+            [-1.2, -10, 0.3, 1.57, "north", [0.8, 0.4, 0, 1], random.random() < 0.30],  # Orange car
             
-            [1.2, 15, 0.3, -1.57, "south", [0, 0, 1, 1], random.random() < 0.25],       # Blue car
-            [1.2, 10, 0.3, -1.57, "south", [0, 0.6, 0.8, 1], random.random() < 0.25],   # Teal car
+            [1.2, 15, 0.3, -1.57, "south", [0, 0, 1, 1], random.random() < 0.30],       # Blue car
+            [1.2, 10, 0.3, -1.57, "south", [0, 0.6, 0.8, 1], random.random() < 0.30],   # Teal car
             
-            [15, 1.2, 0.3, 3.14, "west", [0, 1, 0, 1], random.random() < 0.25],         # Green car
-            [10, 1.2, 0.3, 3.14, "west", [0.5, 0.8, 0.3, 1], random.random() < 0.25],   # Lime car
+            [15, 1.2, 0.3, 3.14, "west", [0, 1, 0, 1], random.random() < 0.30],         # Green car
+            [10, 1.2, 0.3, 3.14, "west", [0.5, 0.8, 0.3, 1], random.random() < 0.30],   # Lime car
             
-            [-15, -1.2, 0.3, 0, "east", [1, 1, 0, 1], random.random() < 0.25],          # Yellow car
-            [-10, -1.2, 0.3, 0, "east", [1, 0, 1, 1], random.random() < 0.25],          # Purple car
+            [-15, -1.2, 0.3, 0, "east", [1, 1, 0, 1], random.random() < 0.30],          # Yellow car
+            [-10, -1.2, 0.3, 0, "east", [1, 0, 1, 1], random.random() < 0.30],          # Purple car
         ]
         
         for spawn_data in car_spawn_data:
@@ -380,7 +392,11 @@ class CrossroadEnvironment:
             )
             wheels.append(wheel)
         
+        car_id = self.car_counter
+        self.car_counter += 1
+
         return {
+            'id': car_id,
             'body': car_body,
             'wheels': wheels,
             'direction': direction,
@@ -437,6 +453,18 @@ class CrossroadEnvironment:
             'position': pedestrian_pos
         }
 
+    def _set_axis_state(self, axis, state):
+        """Set the traffic light state for an entire axis (NS or EW)"""
+        if axis == "NS":
+            self.signal_states["north"] = state
+            self.signal_states["south"] = state
+        else:
+            self.signal_states["east"] = state
+            self.signal_states["west"] = state
+
+    def _get_opposite_axis(self, axis):
+        return "EW" if axis == "NS" else "NS"
+
     def update_traffic_lights(self):
         """Update traffic light states with proper N-S and E-W alternation"""
         self.signal_change_timer += 1
@@ -448,44 +476,21 @@ class CrossroadEnvironment:
                 # Switch to opposite direction - CLEAR N-S vs E-W pattern
                 self.in_yellow_phase = False
                 self.yellow_timer = 0
-                
-                # Toggle between N-S GREEN and E-W GREEN
-                if self.signal_states["north"] == "YELLOW":
-                    # Was N-S green, now switch to E-W green
-                    self.signal_states["north"] = "RED"
-                    self.signal_states["south"] = "RED"
-                    self.signal_states["east"] = "GREEN"
-                    self.signal_states["west"] = "GREEN"
-                else:
-                    # Was E-W green, now switch to N-S green
-                    self.signal_states["north"] = "GREEN"
-                    self.signal_states["south"] = "GREEN"
-                    self.signal_states["east"] = "RED"
-                    self.signal_states["west"] = "RED"
-                
+                previous_axis = self.yellow_axis or self.active_axis
+                next_axis = self._get_opposite_axis(previous_axis)
+                self._set_axis_state(previous_axis, "RED")
+                self._set_axis_state(next_axis, "GREEN")
+                self.active_axis = next_axis
+                self.yellow_axis = None
                 self._update_light_visuals()
         
         # Check if it's time to change signals
         elif self.signal_change_timer >= self.signal_change_interval:
             self.signal_change_timer = 0
             self.in_yellow_phase = True
-            
-            # Set current green direction to yellow
-            if self.signal_states["north"] == "GREEN":
-                # N-S is green, set to yellow
-                self.signal_states["north"] = "YELLOW"
-                self.signal_states["south"] = "YELLOW"
-                # E-W stays RED
-                self.signal_states["east"] = "RED"
-                self.signal_states["west"] = "RED"
-            else:
-                # E-W is green, set to yellow
-                self.signal_states["east"] = "YELLOW"
-                self.signal_states["west"] = "YELLOW"
-                # N-S stays RED
-                self.signal_states["north"] = "RED"
-                self.signal_states["south"] = "RED"
-            
+            self.yellow_axis = self.active_axis
+            self._set_axis_state(self.active_axis, "YELLOW")
+            self._set_axis_state(self._get_opposite_axis(self.active_axis), "RED")
             self._update_light_visuals()
 
     def check_car_ahead(self, car, check_distance=4.0):
@@ -549,8 +554,18 @@ class CrossroadEnvironment:
             # Check if there's a car directly ahead
             car_ahead, distance_to_car = self.check_car_ahead(car, check_distance=4.0)
             
-            # Check traffic light state
-            signal_state = self.signal_states[direction]
+            # Check traffic light state facing this car's lane
+            controlling_signal = self.direction_signal_map.get(direction, direction)
+            signal_state = self.signal_states[controlling_signal]
+
+            # Swap functionalities: treat RED as GREEN and vice versa for behavior
+            if signal_state == "RED":
+                effective_signal = "GREEN"
+            elif signal_state == "GREEN":
+                effective_signal = "RED"
+            else:
+                effective_signal = signal_state
+
             should_stop = False
             can_slow_move = False
             
@@ -559,7 +574,7 @@ class CrossroadEnvironment:
                 should_stop = True
             
             # PRIORITY 2: Traffic light rules (only if no immediate collision risk)
-            elif signal_state == "RED" or signal_state == "YELLOW":
+            elif effective_signal == "RED" or effective_signal == "YELLOW":
                 stop_distance = 4.5
                 
                 if direction == "north" and -stop_distance < current_pos[1] < -2.5:
@@ -627,8 +642,8 @@ class CrossroadEnvironment:
                     elif direction == "west":
                         new_pos = [15, current_pos[1], current_pos[2]]
                     
-                    # Reassign rule-breaker status (25% probability)
-                    car['rule_breaker'] = random.random() < 0.25
+                    # Reassign rule-breaker status (30% probability)
+                    car['rule_breaker'] = random.random() < 0.30
                     car['speed'] = random.uniform(0.05, 0.1)
                 
                 # Apply the new position
