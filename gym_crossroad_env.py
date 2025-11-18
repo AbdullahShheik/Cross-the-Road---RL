@@ -6,64 +6,61 @@ import pybullet as p
 import pybullet_data
 import time
 import random
-from intersection_env import CrossroadEnvironment as BaseCrossroad  # your file
-from config import ENVIRONMENT_CONFIG, CAR_CONFIG, PEDESTRIAN_CONFIG, ENVIRONMENT_OBJECTS, TRAFFIC_LIGHT_CONFIG, RL_CONFIG
+from intersection_env import CrossroadEnvironment as BaseCrossroad 
+from config import PEDESTRIAN_CONFIG, RL_CONFIG
 import math
 
-class CrossroadGymEnv(gym.Env):
+class EnhancedCrossroadGymEnv(gym.Env):
     """
-    Gym wrapper around your CrossroadEnvironment (intersection_env.py).
-    Discrete actions: 0=stay, 1=forward, 2=back, 3=left, 4=right
-    Observation: compact numeric vector (see below)
+    Enhanced Gym wrapper with better reward shaping and state representation.
     """
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
-    def __init__(self, gui=False, max_steps=None):
+    def __init__(self, gui=False, max_steps=None, reward_shaping=True):
         super().__init__()
         self.gui = gui
         self._max_steps = max_steps or RL_CONFIG.get('max_episode_steps', 1000)
-
-        # Create base environment in DIRECT for training; if gui=True use GUI
+        self.reward_shaping = reward_shaping
+        
         self._p_connection_mode = p.GUI if gui else p.DIRECT
-
-        # We'll instantiate BaseCrossroad ourselves but modify it to use DIRECT/GUI
-        # Create a thin new instance of your environment which uses pybullet.
-        # Here I call BaseCrossroad but we will modify how it connects inside BaseCrossroad's __init__:
-        # To keep it simple, we re-create parts of the scene in a lightweight way:
         self._init_pybullet()
 
-        # Action space: discrete 5
+        # Action space: 0=stay, 1=forward, 2=back, 3=left, 4=right
         self.action_space = spaces.Discrete(RL_CONFIG.get('action_space_size', 5))
 
-        # Observation: fixed-length vector
-        # Format: [agent_x, agent_y, agent_vx, agent_vy, target_x, target_y,
-        #          tl_north_state, tl_south_state, tl_east_state, tl_west_state,
-        #          nearest1_dx, nearest1_dy, nearest1_speed, nearest2_dx, nearest2_dy, nearest2_speed]
-        obs_len = 4 + 2 + 4 + 3 * 2  # agent(4) + target(2) + 4 tl + two nearest cars (3 each)
-        self.observation_space = spaces.Box(low=-1000.0, high=1000.0, shape=(obs_len,), dtype=np.float32)
+        # Enhanced observation space
+        obs_len = 4 + 2 + 4 + 3 * 4  # agent(4) + target(2) + 4 tl + four nearest cars
+        self.observation_space = spaces.Box(
+            low=-1000.0, high=1000.0, shape=(obs_len,), dtype=np.float32
+        )
 
         self.step_count = 0
-        self.seed()
-        self._last_collision = False
+        self.last_distance_to_target = None
+        self.collision_detected = False
+        
+        # Statistics
+        self.episode_stats = {
+            'collisions': 0,
+            'successes': 0,
+            'timeouts': 0,
+            'total_reward': 0
+        }
 
     def _init_pybullet(self):
-        # Disconnect any existing connections
+        """Initialize PyBullet environment."""
         try:
             p.disconnect()
         except Exception:
             pass
         
-        # The base environment will handle the pybullet connection
-        # Create base environment which connects to pybullet
         self.base_env = BaseCrossroad(connection_mode=self._p_connection_mode)
         self.physics_client = self.base_env.physicsClient
         
-        # Now make pedestrian controllable: store body id
         self.ped_body_id = self.base_env.pedestrian['torso']
         self.target_pos = PEDESTRIAN_CONFIG.get('target_position', [2.5, 3.5, 0.6])
+        self.start_pos = PEDESTRIAN_CONFIG.get('start_position', [-2.5, 3.5, 0.6])
 
     def seed(self, seed=None):
-        # Gymnasium uses np_random from numpy's random generator
         if seed is not None:
             np.random.seed(seed)
             random.seed(seed)
@@ -71,36 +68,47 @@ class CrossroadGymEnv(gym.Env):
         return [seed]
 
     def _get_obs(self):
+        """Get enhanced observation with more car information."""
         # Agent state
         pos, orn = p.getBasePositionAndOrientation(self.ped_body_id)
         lin_vel, ang_vel = p.getBaseVelocity(self.ped_body_id)
         agent_x, agent_y = pos[0], pos[1]
         agent_vx, agent_vy = lin_vel[0], lin_vel[1]
 
-        # Target (from config, not from base_env which uses start position)
+        # Target position
         target_x, target_y = self.target_pos[0], self.target_pos[1]
 
-        # Traffic lights (map GREEN/YELLOW/RED -> numeric)
+        # Traffic lights
         mapping = {"GREEN": 1.0, "YELLOW": 0.5, "RED": 0.0}
         tl_n = mapping.get(self.base_env.signal_states.get("north", "RED"), 0.0)
         tl_s = mapping.get(self.base_env.signal_states.get("south", "RED"), 0.0)
         tl_e = mapping.get(self.base_env.signal_states.get("east", "RED"), 0.0)
         tl_w = mapping.get(self.base_env.signal_states.get("west", "RED"), 0.0)
 
-        # Nearest two cars (relative pos and speed)
+        # Get information about nearest 4 cars (only active cars)
         cars = []
         for car in self.base_env.cars:
-            pos_c, _ = p.getBasePositionAndOrientation(car['body'])
-            vel_c, _ = p.getBaseVelocity(car['body'])
-            rel_dx = pos_c[0] - agent_x
-            rel_dy = pos_c[1] - agent_y
-            speed = math.hypot(vel_c[0], vel_c[1])
-            dist = math.hypot(rel_dx, rel_dy)
-            cars.append((dist, rel_dx, rel_dy, speed))
+            # Skip removed cars
+            if car['id'] in self.base_env.removed_cars:
+                continue
+                
+            try:
+                pos_c, _ = p.getBasePositionAndOrientation(car['body'])
+                # For kinematic cars, calculate speed from position changes
+                rel_dx = pos_c[0] - agent_x
+                rel_dy = pos_c[1] - agent_y
+                speed = car['speed']  # Use stored speed
+                dist = math.hypot(rel_dx, rel_dy)
+                cars.append((dist, rel_dx, rel_dy, speed))
+            except Exception:
+                # Car might have been removed, skip it
+                continue
+        
         cars.sort(key=lambda x: x[0])
-        # pad if less than 2 cars
-        nearest = cars[:2]
-        while len(nearest) < 2:
+        
+        # Pad to 4 cars
+        nearest = cars[:4]
+        while len(nearest) < 4:
             nearest.append((999.0, 0.0, 0.0, 0.0))
 
         obs = np.array([
@@ -108,90 +116,151 @@ class CrossroadGymEnv(gym.Env):
             target_x, target_y,
             tl_n, tl_s, tl_e, tl_w,
             nearest[0][1], nearest[0][2], nearest[0][3],
-            nearest[1][1], nearest[1][2], nearest[1][3]
+            nearest[1][1], nearest[1][2], nearest[1][3],
+            nearest[2][1], nearest[2][2], nearest[2][3],
+            nearest[3][1], nearest[3][2], nearest[3][3]
         ], dtype=np.float32)
+        
         return obs
 
-    def step(self, action):
-        """
-        Apply simple discrete actions by moving the pedestrian a small step in world frame.
-        Note: For smoother physics you can apply forces or set velocities instead.
-        """
-        # Map action to delta position
-        step_size = 0.15  # meters per step (tune)
-        dx = 0.0
-        dy = 0.0
-        if action == 1:  # forward: +y
-            dy = step_size
-        elif action == 2:  # back
-            dy = -step_size
-        elif action == 3:  # left
-            dx = -step_size
-        elif action == 4:  # right
-            dx = step_size
-        # action==0 -> stay
+    def _calculate_reward(self, action, info):
+        """Calculate reward with dense reward shaping."""
+        reward = 0.0
+        
+        # Get current position
+        agent_pos, _ = p.getBasePositionAndOrientation(self.ped_body_id)
+        dist_to_target = math.hypot(
+            agent_pos[0] - self.target_pos[0],
+            agent_pos[1] - self.target_pos[1]
+        )
+        
+        # Check for collision
+        if self._check_collision():
+            reward += RL_CONFIG['reward_structure'].get('collision_penalty', -100)
+            info['collision'] = True
+            self.episode_stats['collisions'] += 1
+            return reward, True, info
+        
+        # Check if reached target
+        if dist_to_target < 0.5:
+            reward += RL_CONFIG['reward_structure'].get('reach_target', 100)
+            info['success'] = True
+            self.episode_stats['successes'] += 1
+            return reward, True, info
+        
+        # Dense reward shaping (if enabled)
+        if self.reward_shaping:
+            # 1. Progress toward target
+            if self.last_distance_to_target is not None:
+                progress = self.last_distance_to_target - dist_to_target
+                reward += progress * 5.0  # Reward for moving closer
+            
+            # 2. Penalty for being too close to cars
+            min_car_dist = self._get_min_car_distance()
+            if min_car_dist < 2.0:
+                reward -= (2.0 - min_car_dist) * 0.5
+            
+            # 3. Small penalty for staying still
+            if action == 0:
+                reward -= 0.05
+            
+            # 4. Reward for being in crosswalk area
+            if abs(agent_pos[1] - 3.5) < 1.0 and abs(agent_pos[0]) < 3.0:
+                reward += 0.1
+        
+        # Base time penalty
+        reward += RL_CONFIG['reward_structure'].get('time_penalty', -0.1)
+        
+        self.last_distance_to_target = dist_to_target
+        
+        return reward, False, info
 
-        # Move the pedestrian (body and head)
+    def _check_collision(self):
+        """Check for collision with any car."""
+        for car in self.base_env.cars:
+            contacts = p.getContactPoints(
+                bodyA=self.ped_body_id, 
+                bodyB=car['body']
+            )
+            if len(contacts) > 0:
+                return True
+        return False
+
+    def _get_min_car_distance(self):
+        """Get distance to nearest car."""
+        agent_pos, _ = p.getBasePositionAndOrientation(self.ped_body_id)
+        min_dist = float('inf')
+        
+        for car in self.base_env.cars:
+            car_pos, _ = p.getBasePositionAndOrientation(car['body'])
+            dist = math.hypot(
+                car_pos[0] - agent_pos[0],
+                car_pos[1] - agent_pos[1]
+            )
+            min_dist = min(min_dist, dist)
+        
+        return min_dist
+
+    def step(self, action):
+        """Execute action and return next state."""
+        # Map action to movement
+        step_size = 0.15
+        dx, dy = 0.0, 0.0
+        
+        if action == 1:    # forward: +y
+            dy = step_size
+        elif action == 2:  # back: -y
+            dy = -step_size
+        elif action == 3:  # left: -x
+            dx = -step_size
+        elif action == 4:  # right: +x
+            dx = step_size
+        
+        # Move pedestrian
         pos, orn = p.getBasePositionAndOrientation(self.ped_body_id)
         new_pos = [pos[0] + dx, pos[1] + dy, pos[2]]
+        
+        # Boundary constraints (keep pedestrian in reasonable area)
+        new_pos[0] = np.clip(new_pos[0], -5.0, 5.0)
+        new_pos[1] = np.clip(new_pos[1], -5.0, 5.0)
+        
         p.resetBasePositionAndOrientation(self.ped_body_id, new_pos, orn)
         
-        # Also move the head to stay above the body
+        # Move head
         if 'head' in self.base_env.pedestrian:
-            head_pos = [new_pos[0], new_pos[1], new_pos[2] + 0.8]  # Head is 0.8m above body
-            p.resetBasePositionAndOrientation(self.base_env.pedestrian['head'], head_pos, orn)
+            head_pos = [new_pos[0], new_pos[1], new_pos[2] + 0.8]
+            p.resetBasePositionAndOrientation(
+                self.base_env.pedestrian['head'], head_pos, orn
+            )
 
-        # Step the base env: update cars/traffic lights etc. (reuse your update functions)
+        # Update environment
         self.base_env.update_traffic_lights()
         self.base_env.update_cars()
         p.stepSimulation()
 
-        # Reward and termination checks
-        reward = 0.0
-        done = False
+        # Calculate reward and check termination
         info = {}
-
-        # Collision detection: if pedestrian has contact with any car
-        contact_points = []
-        for car in self.base_env.cars:
-            cps = p.getContactPoints(bodyA=self.ped_body_id, bodyB=car['body'])
-            if len(cps) > 0:
-                contact_points.extend(cps)
-        if len(contact_points) > 0:
-            reward += RL_CONFIG['reward_structure'].get('collision_penalty', -100)
-            done = True
-            self._last_collision = True
-        else:
-            # time penalty
-            reward += RL_CONFIG['reward_structure'].get('time_penalty', -0.1)
-            self._last_collision = False
-
-            # check reach target (distance threshold)
-            agent_pos, _ = p.getBasePositionAndOrientation(self.ped_body_id)
-            dist_to_target = math.hypot(agent_pos[0] - self.target_pos[0],
-                                        agent_pos[1] - self.target_pos[1])
-            if dist_to_target < 0.5:
-                reward += RL_CONFIG['reward_structure'].get('reach_target', 100)
-                done = True
-                info['success'] = True
-
+        reward, done, info = self._calculate_reward(action, info)
+        
         self.step_count += 1
+        
+        # Check timeout
         if self.step_count >= self._max_steps:
             done = True
             info['timeout'] = True
+            self.episode_stats['timeouts'] += 1
 
         obs = self._get_obs()
-        # Gymnasium API: return (obs, reward, terminated, truncated, info)
-        terminated = done
-        truncated = False
-        return obs, float(reward), terminated, truncated, info
+        self.episode_stats['total_reward'] += reward
+        
+        return obs, float(reward), done, False, info
 
     def reset(self, seed=None, options=None):
-        # Reset pybullet world and re-create the base environment
+        """Reset environment to initial state."""
         if seed is not None:
             self.seed(seed)
         
-        # Disconnect and recreate everything
+        # Disconnect and recreate
         try:
             p.disconnect()
         except Exception:
@@ -199,31 +268,48 @@ class CrossroadGymEnv(gym.Env):
         
         self._init_pybullet()
         self.step_count = 0
-        self._last_collision = False
+        self.last_distance_to_target = math.hypot(
+            self.start_pos[0] - self.target_pos[0],
+            self.start_pos[1] - self.target_pos[1]
+        )
+        self.collision_detected = False
         
-        # Get start position from config
-        start_pos = PEDESTRIAN_CONFIG.get('start_position', [-2.5, 3.5, 0.6])
-        p.resetBasePositionAndOrientation(self.ped_body_id, start_pos, [0, 0, 0, 1])
+        # Reset pedestrian position
+        p.resetBasePositionAndOrientation(
+            self.ped_body_id, self.start_pos, [0, 0, 0, 1]
+        )
         
-        # Also reset head position if it exists
         if 'head' in self.base_env.pedestrian:
-            head_pos = [start_pos[0], start_pos[1], start_pos[2] + 0.8]
-            p.resetBasePositionAndOrientation(self.base_env.pedestrian['head'], head_pos, [0, 0, 0, 1])
+            head_pos = [
+                self.start_pos[0], 
+                self.start_pos[1], 
+                self.start_pos[2] + 0.8
+            ]
+            p.resetBasePositionAndOrientation(
+                self.base_env.pedestrian['head'], head_pos, [0, 0, 0, 1]
+            )
         
-        # return initial observation and info (gymnasium API)
         obs = self._get_obs()
         info = {}
+        
         return obs, info
 
     def render(self, mode="human"):
-        # If GUI connected, pybullet GUI already shows scene. For headless, could return an image (not implemented).
+        """Render the environment."""
         if self.gui:
             time.sleep(1/60)
-        else:
-            pass
 
     def close(self):
+        """Clean up resources."""
         try:
             p.disconnect()
         except Exception:
             pass
+    
+    def get_statistics(self):
+        """Get episode statistics."""
+        return self.episode_stats.copy()
+
+
+# Keep backward compatibility
+CrossroadGymEnv = EnhancedCrossroadGymEnv

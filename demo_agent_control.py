@@ -7,6 +7,9 @@ import time
 import random
 from gym_crossroad_env import CrossroadGymEnv
 from config import PEDESTRIAN_CONFIG
+import pybullet as p
+import sys
+
 
 def demo_random_agent():
     """Demo with random actions (shows pedestrian moving)"""
@@ -42,7 +45,6 @@ def demo_random_agent():
             done = terminated or truncated
             
             # Get current position
-            import pybullet as p
             pos, _ = p.getBasePositionAndOrientation(env.ped_body_id)
             
             # Print status every 50 steps
@@ -130,7 +132,7 @@ def demo_simple_policy():
             
             if done:
                 if info.get('success'):
-                    print(f"\n✓ Success! Reached target in {step_count} steps!")
+                    print(f"\nSuccess! Reached target in {step_count} steps!")
                 else:
                     print(f"\nEpisode ended at step {step_count}")
                 print("Resetting...")
@@ -146,7 +148,6 @@ def demo_simple_policy():
 
 def main():
     """Main function"""
-    import sys
     
     print("\nChoose demo mode:")
     print("1. Random actions (shows pedestrian moving randomly)")
