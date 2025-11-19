@@ -76,18 +76,14 @@ PEDESTRIAN_CONFIG = {
     # Enhanced navigation for roundabout behavior
     'navigation_mode': 'roundabout',  # 'simple' or 'roundabout'
     'roundabout_waypoints': [
-        [-2.5, 3.5, 0.6],   # Start position
-        [0, 3.5, 0.6],      # North crosswalk center
-        [2.5, 3.5, 0.6],    # Original target (north side)
-        [2.5, 0, 0.6],      # East crosswalk center  
-        [2.5, -3.5, 0.6],   # South crosswalk
-        [0, -3.5, 0.6],     # South crosswalk center
-        [-2.5, -3.5, 0.6],  # West crosswalk
-        [-2.5, 0, 0.6],     # West crosswalk center
-        [-2.5, 3.5, 0.6],   # Back to start (complete loop)
+        [-2.5, 3.5, 0.6],   # Start position (North side)
+        [2.5, 3.5, 0.6],    # East side (cross north crosswalk)
+        [2.5, -3.5, 0.6],   # South side (cross east crosswalk)
+        [-2.5, -3.5, 0.6],  # West side (cross south crosswalk)  
+        [-2.5, 3.5, 0.6],   # Back to start (cross west crosswalk - complete loop)
     ],
-    'waypoint_tolerance': 0.8,  # Distance to consider waypoint reached
-    'min_episodes_per_waypoint': 2,  # Minimum episodes before advancing to next waypoint
+    'waypoint_tolerance': 1.0,  # Distance to consider waypoint reached
+    'require_sequential_waypoints': True,  # Must reach waypoints in order
 }
 
 # Environmental Objects
@@ -155,23 +151,24 @@ RL_CONFIG = {
     'max_episode_steps': 2000,  # Longer episodes for roundabout navigation
     
     'reward_structure': {
-        'reach_waypoint': 50,      # Reward for reaching intermediate waypoint
-        'reach_final_target': 200,  # Higher reward for completing full route
-        'collision_penalty': -100,
-        'time_penalty': -0.05,     # Reduced time penalty for longer episodes
-        'safe_crossing_bonus': 25, # Bonus for crossing safely
-        'near_miss_penalty': -3,   # Penalty for getting too close to cars
-        'progress_reward': 2,      # Reward for moving toward current waypoint
-        'exploration_reward': 1,   # Small reward for exploring new areas
-        'traffic_awareness_bonus': 5,  # Bonus for smart traffic light behavior
+        'reach_waypoint': 100,         # Large reward for reaching each waypoint in sequence
+        'reach_final_target': 500,     # Huge reward for completing full circuit
+        'collision_penalty': -200,     # Severe penalty for collisions
+        'time_penalty': -0.02,         # Very small time penalty
+        'safe_crossing_bonus': 50,     # Bonus for crossing safely
+        'near_miss_penalty': -10,      # Penalty for getting too close to cars
+        'progress_reward': 5,          # Strong reward for moving toward current waypoint
+        'wrong_direction_penalty': -2, # Penalty for moving away from waypoint
+        'traffic_awareness_bonus': 10, # Bonus for smart traffic light behavior
+        'sequential_bonus': 50,        # Bonus for reaching waypoints in correct order
     },
     
-    # DQN Hyperparameters - optimized for faster convergence
+    # DQN Hyperparameters - optimized for better roundabout learning
     'learning_rate': 0.0005,  # Slightly reduced for stability
     'gamma': 0.99,
     'epsilon_start': 1.0,
-    'epsilon_end': 0.01,
-    'epsilon_decay': 0.995,
+    'epsilon_end': 0.05,      # Keep some exploration even late in training
+    'epsilon_decay': 0.9995,  # Slower decay so agent explores longer
     'batch_size': 128,  # Increased for more stable learning
     'replay_buffer_size': 50000,  # Increased buffer for better experience diversity
     'target_update_frequency': 200,  # Less frequent updates for stability

@@ -42,7 +42,11 @@ class EnhancedCrossroadGymEnv(gym.Env):
         self.waypoints = PEDESTRIAN_CONFIG['roundabout_waypoints']
         self.current_waypoint_index = 0
         self.waypoints_reached = 0
-        self.episodes_at_current_waypoint = 0
+        self.total_waypoints_reached = 0
+        
+        # Progress tracking
+        self.last_progress_distance = None
+        self.steps_since_progress = 0
         
         # Statistics
         self.episode_stats = {
@@ -51,7 +55,8 @@ class EnhancedCrossroadGymEnv(gym.Env):
             'timeouts': 0,
             'total_reward': 0,
             'waypoints_reached': 0,
-            'full_loops_completed': 0
+            'full_loops_completed': 0,
+            'sequential_completions': 0
         }
 
     def _init_pybullet(self):
@@ -168,87 +173,104 @@ class EnhancedCrossroadGymEnv(gym.Env):
         
         # Check for collision
         if self._check_collision():
-            reward += RL_CONFIG['reward_structure'].get('collision_penalty', -100)
+            reward += RL_CONFIG['reward_structure'].get('collision_penalty', -200)
             info['collision'] = True
             self.episode_stats['collisions'] += 1
             return reward, True, info
         
         # Check if reached current waypoint
-        if dist_to_current_target < PEDESTRIAN_CONFIG['waypoint_tolerance']:
-            reward += RL_CONFIG['reward_structure'].get('reach_waypoint', 50)
+        tolerance = PEDESTRIAN_CONFIG.get('waypoint_tolerance', 1.0)
+        if dist_to_current_target < tolerance:
+            # Reached waypoint
+            waypoint_reward = RL_CONFIG['reward_structure'].get('reach_waypoint', 100)
+            
+            # Bonus for reaching waypoints sequentially
+            if self.current_waypoint_index == self.waypoints_reached:
+                waypoint_reward += RL_CONFIG['reward_structure'].get('sequential_bonus', 50)
+                info['sequential_waypoint'] = True
+                self.episode_stats['sequential_completions'] += 1
+            
+            reward += waypoint_reward
             self.waypoints_reached += 1
+            self.total_waypoints_reached += 1
             self.episode_stats['waypoints_reached'] += 1
+            
+            # Debug info
+            info['waypoint_reached'] = self.current_waypoint_index
+            info['waypoints_completed'] = self.waypoints_reached
             
             # Advance to next waypoint
             self.current_waypoint_index = (self.current_waypoint_index + 1) % len(self.waypoints)
             self.current_target_pos = self.waypoints[self.current_waypoint_index]
             
-            # Check if completed full loop
-            if self.current_waypoint_index == 0 and self.waypoints_reached > 0:
-                reward += RL_CONFIG['reward_structure'].get('reach_final_target', 200)
+            # Check if completed full loop (reached starting point after visiting others)
+            if self.current_waypoint_index == 0 and self.waypoints_reached >= len(self.waypoints):
+                reward += RL_CONFIG['reward_structure'].get('reach_final_target', 500)
                 info['success'] = True
                 info['full_loop_completed'] = True
                 self.episode_stats['successes'] += 1
                 self.episode_stats['full_loops_completed'] += 1
                 return reward, True, info
             
-            # Update distance for next waypoint
-            self.last_distance_to_target = math.hypot(
+            # Reset progress tracking for new waypoint
+            self.last_progress_distance = math.hypot(
                 agent_pos[0] - self.current_target_pos[0],
                 agent_pos[1] - self.current_target_pos[1]
             )
+            self.steps_since_progress = 0
         
-        # Dense reward shaping (if enabled)
-        if self.reward_shaping:
-            # 1. Progress toward current waypoint
-            if self.last_distance_to_target is not None:
-                progress = self.last_distance_to_target - dist_to_current_target
-                reward += progress * RL_CONFIG['reward_structure'].get('progress_reward', 2)
-            
-            # 2. Penalty for being too close to cars
-            min_car_dist = self._get_min_car_distance()
-            if min_car_dist < 2.0:
-                penalty = (2.0 - min_car_dist) * RL_CONFIG['reward_structure'].get('near_miss_penalty', -3)
-                reward += penalty
-            elif min_car_dist > 3.0:  # Bonus for maintaining safe distance
-                reward += 0.1
-            
-            # 3. Small penalty for staying still (encourage movement)
-            if action == 0:
-                reward -= 0.1
-            
-            # 4. Traffic awareness bonus (reward for good timing)
-            agent_x, agent_y = agent_pos[0], agent_pos[1]
-            in_intersection = abs(agent_x) < 3.0 and abs(agent_y) < 3.0
-            
-            if in_intersection:
-                # Check if pedestrian is crossing during safe signal
-                ns_signals = [self.base_env.signal_states['north'], self.base_env.signal_states['south']]
-                ew_signals = [self.base_env.signal_states['east'], self.base_env.signal_states['west']]
-                
-                crossing_ns = abs(agent_y) > abs(agent_x)  # More N-S movement
-                
-                if crossing_ns and any(s == "GREEN" for s in ns_signals):
-                    reward += RL_CONFIG['reward_structure'].get('traffic_awareness_bonus', 5)
-                elif not crossing_ns and any(s == "GREEN" for s in ew_signals):
-                    reward += RL_CONFIG['reward_structure'].get('traffic_awareness_bonus', 5)
-            
-            # 5. Exploration reward for visiting different areas
-            exploration_zones = [
-                (agent_x > 1.5, "east"),    # Eastern area
-                (agent_x < -1.5, "west"),   # Western area  
-                (agent_y > 1.5, "north"),   # Northern area
-                (agent_y < -1.5, "south")   # Southern area
-            ]
-            
-            for in_zone, zone_name in exploration_zones:
-                if in_zone:
-                    reward += 0.2  # Small exploration bonus
+        # Progress reward - strong reward for moving toward current waypoint
+        if self.last_progress_distance is not None:
+            progress = self.last_progress_distance - dist_to_current_target
+            if progress > 0:
+                # Moving toward waypoint
+                reward += progress * RL_CONFIG['reward_structure'].get('progress_reward', 5)
+                self.steps_since_progress = 0
+            else:
+                # Moving away from waypoint
+                reward += progress * RL_CONFIG['reward_structure'].get('wrong_direction_penalty', -2)
+                self.steps_since_progress += 1
         
-        # Base time penalty (reduced for longer episodes)
-        reward += RL_CONFIG['reward_structure'].get('time_penalty', -0.05)
+        # Penalty for staying in one place too long
+        if self.steps_since_progress > 50:
+            reward -= 1.0
+        
+        # Safety rewards and penalties
+        min_car_dist = self._get_min_car_distance()
+        if min_car_dist < 1.5:
+            penalty = (1.5 - min_car_dist) * RL_CONFIG['reward_structure'].get('near_miss_penalty', -10)
+            reward += penalty
+        elif min_car_dist > 3.0:  # Bonus for maintaining safe distance
+            reward += 0.5
+        
+        # Traffic light awareness bonus
+        agent_x, agent_y = agent_pos[0], agent_pos[1]
+        in_intersection = abs(agent_x) < 3.0 and abs(agent_y) < 3.0
+        
+        if in_intersection:
+            # Check if pedestrian is crossing during safe signal
+            crossing_ns = abs(agent_y) > abs(agent_x)  # More N-S movement
+            
+            if crossing_ns:
+                # Check North-South signals
+                ns_green = any(self.base_env.signal_states[d] == "GREEN" for d in ['north', 'south'])
+                if ns_green:
+                    reward += RL_CONFIG['reward_structure'].get('traffic_awareness_bonus', 10)
+            else:
+                # Check East-West signals  
+                ew_green = any(self.base_env.signal_states[d] == "GREEN" for d in ['east', 'west'])
+                if ew_green:
+                    reward += RL_CONFIG['reward_structure'].get('traffic_awareness_bonus', 10)
+        
+        # Small penalty for staying still (encourage movement)
+        if action == 0:
+            reward -= 0.2
+        
+        # Very small time penalty
+        reward += RL_CONFIG['reward_structure'].get('time_penalty', -0.02)
         
         self.last_distance_to_target = dist_to_current_target
+        self.last_progress_distance = dist_to_current_target
         
         return reward, False, info
 
@@ -316,7 +338,12 @@ class EnhancedCrossroadGymEnv(gym.Env):
         p.stepSimulation()
 
         # Calculate reward and check termination
-        info = {}
+        info = {
+            'waypoints_completed': self.waypoints_reached,
+            'current_waypoint': self.current_waypoint_index,
+            'total_waypoints': len(self.waypoints)
+        }
+        
         reward, done, info = self._calculate_reward(action, info)
         
         self.step_count += 1
@@ -346,10 +373,14 @@ class EnhancedCrossroadGymEnv(gym.Env):
         self._init_pybullet()
         self.step_count = 0
         
-        # Reset roundabout navigation
+        # Reset roundabout navigation to start
         self.current_waypoint_index = 0
         self.current_target_pos = self.waypoints[0]
         self.waypoints_reached = 0
+        
+        # Reset progress tracking
+        self.last_progress_distance = None
+        self.steps_since_progress = 0
         
         self.last_distance_to_target = math.hypot(
             self.start_pos[0] - self.current_target_pos[0],
@@ -357,7 +388,7 @@ class EnhancedCrossroadGymEnv(gym.Env):
         )
         self.collision_detected = False
         
-        # Reset pedestrian position
+        # Reset pedestrian position to start
         p.resetBasePositionAndOrientation(
             self.ped_body_id, self.start_pos, [0, 0, 0, 1]
         )
@@ -373,8 +404,11 @@ class EnhancedCrossroadGymEnv(gym.Env):
             )
         
         obs = self._get_obs()
-        info = {'current_waypoint': self.current_waypoint_index, 
-                'waypoints_reached': self.waypoints_reached}
+        info = {
+            'current_waypoint': self.current_waypoint_index, 
+            'waypoints_reached': self.waypoints_reached,
+            'target_position': self.current_target_pos
+        }
         
         return obs, info
 

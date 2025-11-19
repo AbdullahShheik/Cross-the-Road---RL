@@ -95,13 +95,22 @@ def train_agent(
         epsilons.append(agent.epsilon)
         episode_rewards.append(score)
         
-        # Print progress
+        # Print progress with more detailed info
         if episode % 10 == 0:
             avg_score = np.mean(scores_window)
+            # Get episode info for better tracking
+            waypoints = info.get('waypoints_completed', 0)
+            success = info.get('success', False)
+            collision = info.get('collision', False)
+            
+            status = "SUCCESS" if success else ("COLLISION" if collision else "TIMEOUT")
+            
             print(f"Episode {episode:4d} | "
-                  f"Avg Score: {avg_score:7.2f} | "
-                  f"Score: {score:7.2f} | "
+                  f"Avg Score: {avg_score:8.2f} | "
+                  f"Score: {score:8.2f} | "
                   f"Steps: {steps:4d} | "
+                  f"Waypoints: {waypoints} | "
+                  f"Status: {status:9s} | "
                   f"Epsilon: {agent.epsilon:.3f} | "
                   f"Buffer: {len(replay_buffer):5d}")
         
@@ -110,15 +119,40 @@ def train_agent(
             model_path = os.path.join(save_dir, f'dqn_model_episode_{episode}.pth')
             agent.save(model_path)
         
-        # Check if solved (average score > threshold)
+        # Track success metrics for better evaluation
+        recent_successes = sum(1 for i in range(max(0, episode-20), episode) 
+                              if i < len(episode_rewards) and episode_rewards[i-1] > 0)
+        
+        # Only consider solved if BOTH high score AND actual waypoint completion
         if len(scores_window) >= 100:
             avg_score = np.mean(scores_window)
-            if avg_score >= 50.0:  # Threshold for "solving" the environment
-                print(f"\nEnvironment solved in {episode} episodes!")
+            
+            # Count recent episodes with waypoint completions (actual success)
+            recent_waypoint_episodes = 0
+            recent_success_episodes = 0
+            for i in range(max(0, episode-50), episode):
+                if i < len(episode_rewards):
+                    # Check if this episode had any waypoints (success indicator)
+                    # We'll consider an episode successful if score > 3000 (indicates waypoint rewards)
+                    if episode_rewards[i-1] > 3000:
+                        recent_waypoint_episodes += 1
+                    # Check for full circuit completion (very high scores)
+                    if episode_rewards[i-1] > 8000:  # Full circuit completion
+                        recent_success_episodes += 1
+            
+            waypoint_success_rate = recent_waypoint_episodes / min(50, episode) if episode > 0 else 0
+            full_circuit_rate = recent_success_episodes / min(50, episode) if episode > 0 else 0
+            
+            # Very high threshold - only "solved" if consistently completing full circuits
+            if avg_score >= 8000.0 and waypoint_success_rate >= 0.6 and full_circuit_rate >= 0.3:
+                print(f"\nEnvironment truly solved in {episode} episodes!")
                 print(f"Average score: {avg_score:.2f}")
+                print(f"Waypoint success rate: {waypoint_success_rate*100:.1f}%")
+                print(f"Full circuit rate: {full_circuit_rate*100:.1f}%")
+                print("Agent consistently completing full roundabout circuits!")
                 model_path = os.path.join(save_dir, 'dqn_model_solved.pth')
                 agent.save(model_path)
-                break
+                # Continue training for even better performance
     
     # Save final model
     final_model_path = os.path.join(save_dir, 'dqn_model_final.pth')

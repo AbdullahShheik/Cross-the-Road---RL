@@ -74,10 +74,25 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=1000):
             # Check for success or collision
             if info.get('success', False):
                 successes += 1
-                print(f"  ✓ Success! Reached target in {steps} steps")
-            elif done and steps < max_steps and reward < -50:
+                waypoints = info.get('waypoints_completed', 0)
+                print(f"  ✓ Success! Completed full roundabout circuit in {steps} steps")
+                print(f"    Waypoints reached: {waypoints}")
+            elif info.get('collision', False):
                 collisions += 1
+                waypoints = info.get('waypoints_completed', 0)
                 print(f"  ✗ Collision occurred at step {steps}")
+                print(f"    Waypoints reached before collision: {waypoints}")
+            elif done and steps >= max_steps:
+                waypoints = info.get('waypoints_completed', 0)
+                print(f"  ⏱️ Timeout after {steps} steps")
+                print(f"    Waypoints reached: {waypoints}")
+            
+            # Print current waypoint target
+            if 'current_waypoint' in info:
+                wp_idx = info['current_waypoint']
+                waypoint_names = ['North→East', 'East→South', 'South→West', 'West→North', 'Complete']
+                if wp_idx < len(waypoint_names):
+                    print(f"    Current target: {waypoint_names[wp_idx]}")
         
         episode_scores.append(score)
         episode_steps.append(steps)
