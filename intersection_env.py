@@ -4,27 +4,34 @@ import time
 import math
 import random
 import numpy as np
-from config import ENVIRONMENT_CONFIG, CAR_CONFIG, PEDESTRIAN_CONFIG, ENVIRONMENT_OBJECTS, TRAFFIC_LIGHT_CONFIG
+from config import ENVIRONMENT_CONFIG, CAR_CONFIG, PEDESTRIAN_CONFIG, ENVIRONMENT_OBJECTS, TRAFFIC_LIGHT_CONFIG, SIMULATION_CONFIG
 
 class CrossroadEnvironment:
     def __init__(self, connection_mode=p.GUI):
-        # Connect to PyBullet GUI
+        # Connect to PyBullet with optimized settings
         self.physicsClient = p.connect(connection_mode)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, -9.8)
         
-        # Enhanced lighting and camera
-        p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1)
-        p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
-        p.configureDebugVisualizer(p.COV_ENABLE_WIREFRAME, 0)
-        p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
-        p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
+        # Performance optimizations
+        if SIMULATION_CONFIG.get('enable_graphics_optimization', True):
+            # Optimize rendering
+            p.configureDebugVisualizer(p.COV_ENABLE_SHADOWS, 1 if SIMULATION_CONFIG.get('enable_shadows', True) else 0)
+            p.configureDebugVisualizer(p.COV_ENABLE_GUI, 1)
+            p.configureDebugVisualizer(p.COV_ENABLE_WIREFRAME, 0)
+            p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 1 if SIMULATION_CONFIG.get('enable_rgb_preview', False) else 0)
+            p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 1 if SIMULATION_CONFIG.get('enable_depth_buffer', False) else 0)
+            
+            # Set physics solver iterations for performance
+            p.setPhysicsEngineParameter(numSolverIterations=SIMULATION_CONFIG.get('physics_solver_iterations', 50))
+            p.setPhysicsEngineParameter(collisionFilterMode=1)  # Enable collision filtering for performance
         
+        # Enhanced camera setup with better viewing angle
         p.resetDebugVisualizerCamera(
-            cameraDistance=18,
-            cameraYaw=45,
-            cameraPitch=-35,
-            cameraTargetPosition=[0, 0, 0]
+            cameraDistance=ENVIRONMENT_CONFIG.get('camera_distance', 18),
+            cameraYaw=ENVIRONMENT_CONFIG.get('camera_yaw', 45),
+            cameraPitch=ENVIRONMENT_CONFIG.get('camera_pitch', -35),
+            cameraTargetPosition=ENVIRONMENT_CONFIG.get('camera_target', [0, 0, 0])
         )
         
         # Initialize scene components

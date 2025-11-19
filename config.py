@@ -72,6 +72,22 @@ PEDESTRIAN_CONFIG = {
     # Movement parameters for RL
     'movement_speed': 0.05,
     'safe_distance_from_car': 3.0,  # Minimum safe distance from cars
+    
+    # Enhanced navigation for roundabout behavior
+    'navigation_mode': 'roundabout',  # 'simple' or 'roundabout'
+    'roundabout_waypoints': [
+        [-2.5, 3.5, 0.6],   # Start position
+        [0, 3.5, 0.6],      # North crosswalk center
+        [2.5, 3.5, 0.6],    # Original target (north side)
+        [2.5, 0, 0.6],      # East crosswalk center  
+        [2.5, -3.5, 0.6],   # South crosswalk
+        [0, -3.5, 0.6],     # South crosswalk center
+        [-2.5, -3.5, 0.6],  # West crosswalk
+        [-2.5, 0, 0.6],     # West crosswalk center
+        [-2.5, 3.5, 0.6],   # Back to start (complete loop)
+    ],
+    'waypoint_tolerance': 0.8,  # Distance to consider waypoint reached
+    'min_episodes_per_waypoint': 2,  # Minimum episodes before advancing to next waypoint
 }
 
 # Environmental Objects
@@ -130,36 +146,40 @@ TRAFFIC_LIGHT_CONFIG = {
 
 # RL Training Settings
 RL_CONFIG = {
-    # State space: [ped_x, ped_y, ped_vx, ped_vy, target_x, target_y, 
-    #               4 traffic lights (N,S,E,W), 8 cars (x,y for each)]
-    'state_space_size': 22,  # Updated for 8 cars
+    # Enhanced state space for roundabout navigation
+    # [ped_x, ped_y, ped_vx, ped_vy, current_target_x, current_target_y, waypoint_index,
+    #  4 traffic lights (N,S,E,W), 8 cars (rel_x,rel_y,vx,vy for each)]
+    'state_space_size': 43,  # 4 + 3 + 4 + 32 = 43 total dimensions
     'action_space_size': 5,  # 0=stay, 1=forward, 2=back, 3=left, 4=right
     
-    'max_episode_steps': 1000,
+    'max_episode_steps': 2000,  # Longer episodes for roundabout navigation
     
     'reward_structure': {
-        'reach_target': 100,
+        'reach_waypoint': 50,      # Reward for reaching intermediate waypoint
+        'reach_final_target': 200,  # Higher reward for completing full route
         'collision_penalty': -100,
-        'time_penalty': -0.1,
-        'safe_crossing_bonus': 50,
-        'near_miss_penalty': -5,  # Penalty for getting too close to cars
-        'progress_reward': 1,      # Small reward for moving toward goal
+        'time_penalty': -0.05,     # Reduced time penalty for longer episodes
+        'safe_crossing_bonus': 25, # Bonus for crossing safely
+        'near_miss_penalty': -3,   # Penalty for getting too close to cars
+        'progress_reward': 2,      # Reward for moving toward current waypoint
+        'exploration_reward': 1,   # Small reward for exploring new areas
+        'traffic_awareness_bonus': 5,  # Bonus for smart traffic light behavior
     },
     
-    # DQN Hyperparameters
-    'learning_rate': 0.001,
+    # DQN Hyperparameters - optimized for faster convergence
+    'learning_rate': 0.0005,  # Slightly reduced for stability
     'gamma': 0.99,
     'epsilon_start': 1.0,
     'epsilon_end': 0.01,
     'epsilon_decay': 0.995,
-    'batch_size': 64,
-    'replay_buffer_size': 10000,
-    'target_update_frequency': 100,
+    'batch_size': 128,  # Increased for more stable learning
+    'replay_buffer_size': 50000,  # Increased buffer for better experience diversity
+    'target_update_frequency': 200,  # Less frequent updates for stability
     'train_frequency': 4,
-    'min_replay_size': 1000,
+    'min_replay_size': 2000,  # More initial experience before training
     
-    # Neural Network Architecture
-    'hidden_layers': [128, 128, 64],
+    # Neural Network Architecture - optimized  
+    'hidden_layers': [256, 256, 128],  # Larger network for complex roundabout behavior
 }
 
 # Simulation Settings
@@ -168,4 +188,16 @@ SIMULATION_CONFIG = {
     'gui_mode': True,
     'enable_shadows': True,
     'physics_timestep': 1/240,  # More accurate physics
+    
+    # Performance optimizations
+    'enable_graphics_optimization': True,
+    'max_render_fps': 30,  # Limit rendering FPS for performance
+    'physics_solver_iterations': 50,  # Reduced for better performance
+    'collision_margin': 0.001,  # Smaller margin for better performance
+    
+    # Visual quality settings
+    'enable_anti_aliasing': False,  # Disable for performance
+    'shadow_map_size': 512,       # Reduced shadow quality for performance
+    'enable_depth_buffer': False, # Disable for performance
+    'enable_rgb_preview': False,  # Disable unnecessary previews
 }
