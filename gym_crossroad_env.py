@@ -10,7 +10,7 @@ from intersection_env import CrossroadEnvironment as BaseCrossroad
 from config import PEDESTRIAN_CONFIG, RL_CONFIG
 import math
 
-class EnhancedCrossroadGymEnv(gym.Env):
+class CrossroadGymEnv(gym.Env):
     """
     Enhanced Gym wrapper with roundabout navigation and better reward shaping.
     """
@@ -434,6 +434,3 @@ class EnhancedCrossroadGymEnv(gym.Env):
         })
         return stats
 
-
-# Keep backward compatibility
-CrossroadGymEnv = EnhancedCrossroadGymEnv
