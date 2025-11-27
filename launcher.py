@@ -11,7 +11,7 @@ import argparse
 
 def test_simulation():
     """Test the crossroad simulation environment"""
-    print("🚦 Starting Crossroad Simulation Test...")
+    print("Starting Crossroad Simulation Test...")
     print("This will show the 3D environment with cars and traffic lights.")
     print("Press Ctrl+C to stop.")
     print("-" * 50)
@@ -22,16 +22,16 @@ def test_simulation():
         env = CrossroadEnvironment()
         env.run_simulation()
     except KeyboardInterrupt:
-        print("\n✅ Test completed!")
+        print("\nTest completed!")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         return 1
     return 0
 
 
 def train_model():
     """Train the DQN agent"""
-    print("🤖 Starting DQN Agent Training...")
+    print("Starting DQN Agent Training...")
     print("This will train the pedestrian to navigate the roundabout safely.")
     print("Training may take a while depending on your hardware.")
     print("-" * 50)
@@ -58,14 +58,14 @@ def train_model():
             save_frequency=50
         )
         
-        print("✅ Training completed! Model saved in ./models/")
+        print("Training completed! Model saved in ./models/")
         return 0
         
     except KeyboardInterrupt:
-        print("\n⚠️ Training stopped by user")
+        print("\nTraining stopped by user")
         return 0
     except Exception as e:
-        print(f"❌ Training failed: {e}")
+        print(f"Training failed: {e}")
         import traceback
         traceback.print_exc()
         return 1
@@ -76,12 +76,12 @@ def run_trained_model():
     model_path = 'models/dqn_model_final.pth'
     
     if not os.path.exists(model_path):
-        print("❌ No trained model found!")
+        print("No trained model found!")
         print("Please train the model first using option 2.")
         print(f"Looking for: {model_path}")
         return 1
     
-    print("🎯 Running Trained Agent...")
+    print("Running Trained Agent...")
     print("Watch the pedestrian navigate the roundabout!")
     print("The agent will cross multiple roads and avoid vehicles.")
     print("-" * 50)
@@ -98,15 +98,15 @@ def run_trained_model():
             max_steps=2000
         )
         
-        print("\n✅ Evaluation completed!")
+        print("\nEvaluation completed!")
         print(f"Success rate: {results['success_rate']*100:.1f}%")
         return 0
         
     except KeyboardInterrupt:
-        print("\n⚠️ Stopped by user")
+        print("\nStopped by user")
         return 0
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
         import traceback
         traceback.print_exc()
         return 1
@@ -134,8 +134,9 @@ Examples:
     
     if len(sys.argv) == 1:
         # Interactive mode
+        # NOTE: Avoid Unicode emojis in the banner for better Windows console compatibility
         print("=" * 60)
-        print("🚦 CROSSROAD REINFORCEMENT LEARNING PROJECT")
+        print("CROSSROAD REINFORCEMENT LEARNING PROJECT")
         print("=" * 60)
         print("Train an AI agent to safely cross a busy roundabout!")
         print()
@@ -157,13 +158,13 @@ Examples:
                 elif choice == '3':
                     return run_trained_model()
                 elif choice == '4':
-                    print("Goodbye! 👋")
+                    print("Goodbye!")
                     return 0
                 else:
-                    print("❌ Invalid choice. Please select 1-4.")
+                    print("Invalid choice. Please select 1-4.")
                     
             except (KeyboardInterrupt, EOFError):
-                print("\nGoodbye! 👋")
+                print("\nGoodbye!")
                 return 0
     else:
         # Command line mode

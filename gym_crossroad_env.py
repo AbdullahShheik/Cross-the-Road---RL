@@ -23,6 +23,14 @@ class CrossroadGymEnv(gym.Env):
         self.reward_shaping = reward_shaping
         
         self._p_connection_mode = p.GUI if gui else p.DIRECT
+        self.navigation_mode = PEDESTRIAN_CONFIG.get('navigation_mode', 'roundabout')
+        self.sequential_phases = PEDESTRIAN_CONFIG.get('sequential_cross_phases', [])
+        self.center_idle_zone = PEDESTRIAN_CONFIG.get(
+            'center_idle_zone',
+            {'x': [-1.0, 1.0], 'y': [-1.0, 1.0]}
+        )
+        self.center_idle_penalty = PEDESTRIAN_CONFIG.get('center_idle_penalty', -0.5)
+        self._configure_navigation_plan()
         self._init_pybullet()
 
         # Action space: 0=stay, 1=forward, 2=back, 3=left, 4=right
@@ -38,8 +46,7 @@ class CrossroadGymEnv(gym.Env):
         self.last_distance_to_target = None
         self.collision_detected = False
         
-        # Roundabout navigation state
-        self.waypoints = PEDESTRIAN_CONFIG['roundabout_waypoints']
+        # Roundabout/Sequential navigation state
         self.current_waypoint_index = 0
         self.waypoints_reached = 0
         self.total_waypoints_reached = 0
@@ -71,11 +78,54 @@ class CrossroadGymEnv(gym.Env):
         
         self.ped_body_id = self.base_env.pedestrian['torso']
         self.start_pos = PEDESTRIAN_CONFIG.get('start_position', [-2.5, 3.5, 0.6])
-        
-        # Initialize roundabout navigation
-        self.waypoints = PEDESTRIAN_CONFIG['roundabout_waypoints']
+        self._reset_navigation_state()
+
+    def _configure_navigation_plan(self):
+        """Prepare the waypoint plan based on configured navigation mode."""
+        if self.navigation_mode == 'sequential_cross' and self.sequential_phases:
+            self.navigation_plan = self.sequential_phases
+            self.waypoints = [phase['target'] for phase in self.navigation_plan]
+        else:
+            self.navigation_plan = []
+            self.waypoints = PEDESTRIAN_CONFIG.get(
+                'roundabout_waypoints',
+                [PEDESTRIAN_CONFIG.get('start_position', [-2.5, 3.5, 0.6])]
+            )
+
+    def _reset_navigation_state(self):
+        """Reset indices and targets for navigation."""
+        if not getattr(self, 'waypoints', None):
+            self._configure_navigation_plan()
         self.current_waypoint_index = 0
-        self.current_target_pos = self.waypoints[self.current_waypoint_index]
+        self.waypoints_reached = 0
+        if self.waypoints:
+            self.current_target_pos = self.waypoints[0]
+        else:
+            self.current_target_pos = self.start_pos
+        self.last_progress_distance = math.hypot(
+            self.start_pos[0] - self.current_target_pos[0],
+            self.start_pos[1] - self.current_target_pos[1]
+        )
+        self.steps_since_progress = 0
+        self.center_crossed_this_waypoint = False
+
+    def _get_current_phase(self):
+        """Return metadata for the current sequential phase, if available."""
+        if (
+            self.navigation_mode == 'sequential_cross'
+            and self.navigation_plan
+            and 0 <= self.current_waypoint_index < len(self.navigation_plan)
+        ):
+            return self.navigation_plan[self.current_waypoint_index]
+        return None
+
+    def _position_in_zone(self, zone, position):
+        """Check if a position lies within a rectangular zone."""
+        if not zone:
+            return False
+        x_min, x_max = zone.get('x', (-float('inf'), float('inf')))
+        y_min, y_max = zone.get('y', (-float('inf'), float('inf')))
+        return x_min <= position[0] <= x_max and y_min <= position[1] <= y_max
 
     def seed(self, seed=None):
         if seed is not None:
@@ -166,6 +216,7 @@ class CrossroadGymEnv(gym.Env):
         
         # Get current position
         agent_pos, _ = p.getBasePositionAndOrientation(self.ped_body_id)
+        agent_x, agent_y = agent_pos[0], agent_pos[1]
         dist_to_current_target = math.hypot(
             agent_pos[0] - self.current_target_pos[0],
             agent_pos[1] - self.current_target_pos[1]
@@ -178,46 +229,84 @@ class CrossroadGymEnv(gym.Env):
             self.episode_stats['collisions'] += 1
             return reward, True, info
         
-        # Check if reached current waypoint
+        # Check if reached current waypoint/phase
+        current_phase = self._get_current_phase()
         tolerance = PEDESTRIAN_CONFIG.get('waypoint_tolerance', 1.0)
-        if dist_to_current_target < tolerance:
-            # Reached waypoint
-            waypoint_reward = RL_CONFIG['reward_structure'].get('reach_waypoint', 100)
+        if current_phase and 'tolerance' in current_phase:
+            tolerance = current_phase['tolerance']
+        
+        completion_zone = current_phase.get('completion_zone') if current_phase else None
+        reached_waypoint = False
+        if completion_zone and self._position_in_zone(completion_zone, agent_pos):
+            reached_waypoint = True
+        elif dist_to_current_target < tolerance:
+            reached_waypoint = True
+        
+        if reached_waypoint:
+            print("WAYPOINT REACHED:", current_phase['name'], "at", agent_pos)
+            idx_before_advance = self.current_waypoint_index
+            phase_reward = RL_CONFIG['reward_structure'].get('reach_waypoint', 100)
+            if current_phase and 'reward' in current_phase:
+                phase_reward = current_phase['reward']
             
-            # Bonus for reaching waypoints sequentially
-            if self.current_waypoint_index == self.waypoints_reached:
-                waypoint_reward += RL_CONFIG['reward_structure'].get('sequential_bonus', 50)
+            if idx_before_advance == self.waypoints_reached:
+                phase_reward += RL_CONFIG['reward_structure'].get('sequential_bonus', 50)
                 info['sequential_waypoint'] = True
                 self.episode_stats['sequential_completions'] += 1
             
-            reward += waypoint_reward
+            reward += phase_reward
             self.waypoints_reached += 1
             self.total_waypoints_reached += 1
             self.episode_stats['waypoints_reached'] += 1
-            
-            # Debug info
-            info['waypoint_reached'] = self.current_waypoint_index
+            info['waypoint_reached'] = idx_before_advance
             info['waypoints_completed'] = self.waypoints_reached
             
-            # Advance to next waypoint
-            self.current_waypoint_index = (self.current_waypoint_index + 1) % len(self.waypoints)
-            self.current_target_pos = self.waypoints[self.current_waypoint_index]
-            
-            # Check if completed full loop (reached starting point after visiting others)
-            if self.current_waypoint_index == 0 and self.waypoints_reached >= len(self.waypoints):
-                reward += RL_CONFIG['reward_structure'].get('reach_final_target', 500)
-                info['success'] = True
-                info['full_loop_completed'] = True
-                self.episode_stats['successes'] += 1
-                self.episode_stats['full_loops_completed'] += 1
-                return reward, True, info
+            if self.navigation_mode == 'sequential_cross' and self.waypoints:
+                # Success only when ALL waypoints have been reached (explicit check)
+                if self.waypoints_reached >= len(self.waypoints):
+                    reward += RL_CONFIG['reward_structure'].get('reach_final_target', 500)
+                    info['success'] = True
+                    info['full_loop_completed'] = True
+                    info['waypoints_completed'] = self.waypoints_reached
+                    self.episode_stats['successes'] += 1
+                    self.episode_stats['full_loops_completed'] += 1
+                    return reward, True, info
+                
+                # Advance to next waypoint
+                self.current_waypoint_index += 1
+                if self.current_waypoint_index < len(self.waypoints):
+                    self.current_target_pos = self.waypoints[self.current_waypoint_index]
+                else:
+                    # Should not reach here if success check above works, but just in case
+                    reward += RL_CONFIG['reward_structure'].get('reach_final_target', 500)
+                    info['success'] = True
+                    info['full_loop_completed'] = True
+                    info['waypoints_completed'] = self.waypoints_reached
+                    self.episode_stats['successes'] += 1
+                    self.episode_stats['full_loops_completed'] += 1
+                    return reward, True, info
+            else:
+                self.current_waypoint_index = (self.current_waypoint_index + 1) % len(self.waypoints)
+                self.current_target_pos = self.waypoints[self.current_waypoint_index]
+                
+                if self.current_waypoint_index == 0 and self.waypoints_reached >= len(self.waypoints):
+                    reward += RL_CONFIG['reward_structure'].get('reach_final_target', 500)
+                    info['success'] = True
+                    info['full_loop_completed'] = True
+                    self.episode_stats['successes'] += 1
+                    self.episode_stats['full_loops_completed'] += 1
+                    return reward, True, info
             
             # Reset progress tracking for new waypoint
-            self.last_progress_distance = math.hypot(
+            new_target_dist = math.hypot(
                 agent_pos[0] - self.current_target_pos[0],
                 agent_pos[1] - self.current_target_pos[1]
             )
+            self.last_progress_distance = new_target_dist
+            dist_to_current_target = new_target_dist
             self.steps_since_progress = 0
+            # Reset center crossing flag for next waypoint
+            self.center_crossed_this_waypoint = False
         
         # Progress reward - strong reward for moving toward current waypoint
         if self.last_progress_distance is not None:
@@ -231,9 +320,78 @@ class CrossroadGymEnv(gym.Env):
                 reward += progress * RL_CONFIG['reward_structure'].get('wrong_direction_penalty', -2)
                 self.steps_since_progress += 1
         
+        # Proximity bonus - extra reward for getting very close to waypoint
+        if current_phase and dist_to_current_target > 0:
+            initial_dist = self.last_progress_distance if self.last_progress_distance else dist_to_current_target
+            if initial_dist > 0:
+                progress_ratio = 1.0 - (dist_to_current_target / initial_dist)
+                if progress_ratio > 0.5:  # More than 50% progress toward waypoint
+                    proximity_bonus = RL_CONFIG['reward_structure'].get('proximity_bonus_scale', 50) * progress_ratio
+                    reward += proximity_bonus
+        
+        # Midway reward - reward for crossing the center line (midway checkpoint)
+        if not hasattr(self, 'center_crossed_this_waypoint'):
+            self.center_crossed_this_waypoint = False
+        
+        center_x, center_y = 0.0, 0.0
+        if current_phase:
+            target = current_phase['target']
+            start = self.start_pos if self.current_waypoint_index == 0 else self.waypoints[self.current_waypoint_index - 1]
+            # Check if agent has crossed the center between start and target
+            if self.current_waypoint_index == 0:
+                start_x, start_y = self.start_pos[0], self.start_pos[1]
+            else:
+                prev_target = self.waypoints[self.current_waypoint_index - 1]
+                start_x, start_y = prev_target[0], prev_target[1]
+            target_x, target_y = target[0], target[1]
+            
+            # Check if we're crossing center (between start and target)
+            mid_x = (start_x + target_x) / 2
+            mid_y = (start_y + target_y) / 2
+            
+            # If agent is near center and hasn't been rewarded yet
+            if abs(agent_x - center_x) < 1.0 and abs(agent_y - center_y) < 1.0:
+                if not self.center_crossed_this_waypoint:
+                    reward += RL_CONFIG['reward_structure'].get('midway_reward', 30)
+                    self.center_crossed_this_waypoint = True
+        
         # Penalty for staying in one place too long
         if self.steps_since_progress > 50:
             reward -= 1.0
+
+        # STRICT Crosswalk discipline: heavy penalty for being off zebra when crossing
+        # North/South zebra: centered at y = ±3.5, zebra spans roughly |x| <= 1.8
+        zebra_half_width_x = 1.8
+        zebra_band_half_y = 1.2  # from create_crosswalks halfExtents
+
+        # North crosswalk band (y around +3.5)
+        if (3.5 - zebra_band_half_y) <= agent_y <= (3.5 + zebra_band_half_y):
+            if abs(agent_x) > zebra_half_width_x:
+                # Scale penalty by distance from zebra center - much stronger!
+                distance_off = abs(agent_x) - zebra_half_width_x
+                reward -= 15.0 * (1.0 + distance_off)  # -15 to -30+ penalty
+
+        # South crosswalk band (y around -3.5)
+        if (-3.5 - zebra_band_half_y) <= agent_y <= (-3.5 + zebra_band_half_y):
+            if abs(agent_x) > zebra_half_width_x:
+                distance_off = abs(agent_x) - zebra_half_width_x
+                reward -= 15.0 * (1.0 + distance_off)
+
+        # East/West zebra: centered at x = ±3.5, zebra spans roughly |y| <= 1.8
+        zebra_half_width_y = 1.8
+        zebra_band_half_x = 1.2
+
+        # East crosswalk band (x around +3.5)
+        if (3.5 - zebra_band_half_x) <= agent_x <= (3.5 + zebra_band_half_x):
+            if abs(agent_y) > zebra_half_width_y:
+                distance_off = abs(agent_y) - zebra_half_width_y
+                reward -= 15.0 * (1.0 + distance_off)
+
+        # West crosswalk band (x around -3.5)
+        if (-3.5 - zebra_band_half_x) <= agent_x <= (-3.5 + zebra_band_half_x):
+            if abs(agent_y) > zebra_half_width_y:
+                distance_off = abs(agent_y) - zebra_half_width_y
+                reward -= 15.0 * (1.0 + distance_off)
         
         # Safety rewards and penalties
         min_car_dist = self._get_min_car_distance()
@@ -244,7 +402,6 @@ class CrossroadGymEnv(gym.Env):
             reward += 0.5
         
         # Traffic light awareness bonus
-        agent_x, agent_y = agent_pos[0], agent_pos[1]
         in_intersection = abs(agent_x) < 3.0 and abs(agent_y) < 3.0
         
         if in_intersection:
@@ -262,12 +419,19 @@ class CrossroadGymEnv(gym.Env):
                 if ew_green:
                     reward += RL_CONFIG['reward_structure'].get('traffic_awareness_bonus', 10)
         
-        # Small penalty for staying still (encourage movement)
-        if action == 0:
-            reward -= 0.2
+        # Idle penalty only when loitering in the center of the intersection
+        if action == 0 and self._position_in_zone(self.center_idle_zone, agent_pos):
+            reward += self.center_idle_penalty
+        
+        # Small bonus for taking movement actions (encourages exploration)
+        if action != 0:  # Any movement action
+            reward += RL_CONFIG['reward_structure'].get('movement_bonus', 0.5)
+        
+        # Survival bonus - small reward for each step survived (encourages avoiding collisions)
+        reward += RL_CONFIG['reward_structure'].get('survival_bonus', 0.1)
         
         # Very small time penalty
-        reward += RL_CONFIG['reward_structure'].get('time_penalty', -0.02)
+        reward += RL_CONFIG['reward_structure'].get('time_penalty', -0.005)
         
         self.last_distance_to_target = dist_to_current_target
         self.last_progress_distance = dist_to_current_target
@@ -318,6 +482,48 @@ class CrossroadGymEnv(gym.Env):
         # Move pedestrian
         pos, orn = p.getBasePositionAndOrientation(self.ped_body_id)
         new_pos = [pos[0] + dx, pos[1] + dy, pos[2]]
+        
+        # STRICT: Force agent to stay on zebra crossings - no wandering in center!
+        zebra_half_width = 1.8
+        zebra_band_half = 1.2
+        intersection_center_size = 3.5  # Size of center intersection
+        
+        # Check if agent is in the center intersection area
+        in_center = abs(new_pos[0]) < intersection_center_size and abs(new_pos[1]) < intersection_center_size
+        
+        if in_center:
+            # In center intersection - must stay on one of the zebra crossing paths
+            # Check which crossing path the agent is closest to
+            dist_to_north = abs(new_pos[1] - 3.5)
+            dist_to_south = abs(new_pos[1] + 3.5)
+            dist_to_east = abs(new_pos[0] - 3.5)
+            dist_to_west = abs(new_pos[0] + 3.5)
+            
+            min_dist = min(dist_to_north, dist_to_south, dist_to_east, dist_to_west)
+            
+            # Force agent onto the nearest zebra crossing path
+            if min_dist == dist_to_north or min_dist == dist_to_south:
+                # On North/South path - constrain x to zebra width
+                new_pos[0] = np.clip(new_pos[0], -zebra_half_width, zebra_half_width)
+            elif min_dist == dist_to_east or min_dist == dist_to_west:
+                # On East/West path - constrain y to zebra width
+                new_pos[1] = np.clip(new_pos[1], -zebra_half_width, zebra_half_width)
+        
+        # North/South zebra crossings - constrain x when in crossing band
+        if (3.5 - zebra_band_half) <= new_pos[1] <= (3.5 + zebra_band_half):
+            # In north crosswalk - must stay within zebra width
+            new_pos[0] = np.clip(new_pos[0], -zebra_half_width, zebra_half_width)
+        elif (-3.5 - zebra_band_half) <= new_pos[1] <= (-3.5 + zebra_band_half):
+            # In south crosswalk - must stay within zebra width
+            new_pos[0] = np.clip(new_pos[0], -zebra_half_width, zebra_half_width)
+        
+        # East/West zebra crossings - constrain y when in crossing band
+        if (3.5 - zebra_band_half) <= new_pos[0] <= (3.5 + zebra_band_half):
+            # In east crosswalk - must stay within zebra width
+            new_pos[1] = np.clip(new_pos[1], -zebra_half_width, zebra_half_width)
+        elif (-3.5 - zebra_band_half) <= new_pos[0] <= (-3.5 + zebra_band_half):
+            # In west crosswalk - must stay within zebra width
+            new_pos[1] = np.clip(new_pos[1], -zebra_half_width, zebra_half_width)
         
         # Boundary constraints (keep pedestrian in reasonable area)
         new_pos[0] = np.clip(new_pos[0], -5.0, 5.0)
@@ -372,21 +578,14 @@ class CrossroadGymEnv(gym.Env):
         
         self._init_pybullet()
         self.step_count = 0
-        
-        # Reset roundabout navigation to start
-        self.current_waypoint_index = 0
-        self.current_target_pos = self.waypoints[0]
-        self.waypoints_reached = 0
-        
-        # Reset progress tracking
-        self.last_progress_distance = None
-        self.steps_since_progress = 0
+        self._reset_navigation_state()
         
         self.last_distance_to_target = math.hypot(
             self.start_pos[0] - self.current_target_pos[0],
             self.start_pos[1] - self.current_target_pos[1]
         )
         self.collision_detected = False
+        self.center_crossed_this_waypoint = False
         
         # Reset pedestrian position to start
         p.resetBasePositionAndOrientation(

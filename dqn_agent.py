@@ -170,9 +170,9 @@ class DQNAgent:
         torch.nn.utils.clip_grad_norm_(self.qnetwork_local.parameters(), 1.0)
         self.optimizer.step()
         
-        # Update epsilon (exploration rate) - slower decay for better exploration
-        if self.epsilon > self.epsilon_min:
-            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        # Note: epsilon (exploration rate) is now controlled per-episode from the
+        # training loop in train_agent.py so that we can shape the exploration
+        # schedule (e.g., ensure a minimum fraction of episodes use high exploration).
     
     def soft_update_target_network(self, tau=1.0):
         """

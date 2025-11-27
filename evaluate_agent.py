@@ -53,6 +53,7 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=1000):
         done = False
         
         print(f"\nEpisode {episode}/{num_episodes}")
+        waypoints_logged = set()  # Track which waypoints we've logged
         
         while not done and steps < max_steps:
             # Select action (no exploration)
@@ -71,28 +72,37 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=1000):
                 env.render()
                 time.sleep(0.05)  # Slow down for visualization
             
+            # Check for waypoint completion and log it
+            waypoints = info.get('waypoints_completed', 0)
+            if waypoints not in waypoints_logged and waypoints > 0:
+                waypoints_logged.add(waypoints)
+                print(f"  ✓ Reached waypoint {waypoints}/4 at step {steps}")
+            
             # Check for success or collision
             if info.get('success', False):
                 successes += 1
                 waypoints = info.get('waypoints_completed', 0)
-                print(f"  ✓ Success! Completed full roundabout circuit in {steps} steps")
-                print(f"    Waypoints reached: {waypoints}")
+                print(f"  🎉 SUCCESS! Completed all {waypoints} waypoints in {steps} steps")
             elif info.get('collision', False):
                 collisions += 1
                 waypoints = info.get('waypoints_completed', 0)
-                print(f"  ✗ Collision occurred at step {steps}")
-                print(f"    Waypoints reached before collision: {waypoints}")
+                print(f"  ✗ Collision at step {steps}")
+                print(f"    Final waypoints reached: {waypoints}/4")
             elif done and steps >= max_steps:
                 waypoints = info.get('waypoints_completed', 0)
                 print(f"  ⏱️ Timeout after {steps} steps")
-                print(f"    Waypoints reached: {waypoints}")
+                print(f"    Final waypoints reached: {waypoints}/4")
             
-            # Print current waypoint target
-            if 'current_waypoint' in info:
-                wp_idx = info['current_waypoint']
-                waypoint_names = ['North→East', 'East→South', 'South→West', 'West→North', 'Complete']
-                if wp_idx < len(waypoint_names):
-                    print(f"    Current target: {waypoint_names[wp_idx]}")
+            # Print current waypoint target every 100 steps
+            if steps % 100 == 0 or done:
+                if 'current_waypoint' in info:
+                    wp_idx = info['current_waypoint']
+                    waypoint_names = ['North→East (1)', 'East→South (2)', 'South→West (3)', 'West→North (4)']
+                    if wp_idx < len(waypoint_names):
+                        target_name = waypoint_names[wp_idx]
+                    else:
+                        target_name = f"Waypoint {wp_idx+1}"
+                    print(f"    Step {steps}: Target={target_name}, Completed={waypoints}/4")
         
         episode_scores.append(score)
         episode_steps.append(steps)

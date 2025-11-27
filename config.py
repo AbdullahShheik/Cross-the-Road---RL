@@ -73,8 +73,34 @@ PEDESTRIAN_CONFIG = {
     'movement_speed': 0.05,
     'safe_distance_from_car': 3.0,  # Minimum safe distance from cars
     
-    # Enhanced navigation for roundabout behavior
-    'navigation_mode': 'roundabout',  # 'simple' or 'roundabout'
+    # Navigation behavior
+    'navigation_mode': 'sequential_cross',  # 'sequential_cross' or 'roundabout'
+    'sequential_cross_phases': [
+        {
+            'name': 'north_cross',
+            'target': [2.5, 3.5, 0.6],
+            'completion_zone': {'x': [1.5, 4.5], 'y': [2.0, 4.5]},  # Expanded zone
+            'reward': 120
+        },
+        {
+            'name': 'east_cross',
+            'target': [2.5, -3.5, 0.6],
+            'completion_zone': {'x': [1.5, 4.5], 'y': [-4.5, -2.0]},  # Expanded zone
+            'reward': 140
+        },
+        {
+            'name': 'south_cross',
+            'target': [-2.5, -3.5, 0.6],
+            'completion_zone': {'x': [-4.5, -1.5], 'y': [-4.5, -2.0]},  # Expanded zone
+            'reward': 160
+        },
+        {
+            'name': 'west_cross',
+            'target': [-2.5, 3.5, 0.6],
+            'completion_zone': {'x': [-4.5, -1.5], 'y': [2.0, 4.5]},  # Expanded zone
+            'reward': 200
+        },
+    ],
     'roundabout_waypoints': [
         [-2.5, 3.5, 0.6],   # Start position (North side)
         [2.5, 3.5, 0.6],    # East side (cross north crosswalk)
@@ -82,8 +108,10 @@ PEDESTRIAN_CONFIG = {
         [-2.5, -3.5, 0.6],  # West side (cross south crosswalk)  
         [-2.5, 3.5, 0.6],   # Back to start (cross west crosswalk - complete loop)
     ],
-    'waypoint_tolerance': 1.0,  # Distance to consider waypoint reached
+    'waypoint_tolerance': 1.5,  # Distance to consider waypoint reached (increased from 1.0)
     'require_sequential_waypoints': True,  # Must reach waypoints in order
+    'center_idle_zone': {'x': [-1.2, 1.2], 'y': [-1.2, 1.2]},
+    'center_idle_penalty': -0.6,
 }
 
 # Environmental Objects
@@ -151,16 +179,20 @@ RL_CONFIG = {
     'max_episode_steps': 2000,  # Longer episodes for roundabout navigation
     
     'reward_structure': {
-        'reach_waypoint': 100,         # Large reward for reaching each waypoint in sequence
-        'reach_final_target': 500,     # Huge reward for completing full circuit
-        'collision_penalty': -200,     # Severe penalty for collisions
-        'time_penalty': -0.02,         # Very small time penalty
+        'reach_waypoint': 150,         # Increased from 100 - makes waypoint completion more valuable
+        'reach_final_target': 1000,    # Increased from 500 - huge bonus for completing all 4
+        'collision_penalty': -80,      # Further reduced from -100 - less discouraging
+        'time_penalty': -0.005,        # Further reduced - less time pressure
         'safe_crossing_bonus': 50,     # Bonus for crossing safely
-        'near_miss_penalty': -10,      # Penalty for getting too close to cars
-        'progress_reward': 5,          # Strong reward for moving toward current waypoint
-        'wrong_direction_penalty': -2, # Penalty for moving away from waypoint
-        'traffic_awareness_bonus': 10, # Bonus for smart traffic light behavior
-        'sequential_bonus': 50,        # Bonus for reaching waypoints in correct order
+        'near_miss_penalty': -3,       # Further reduced from -5 - less discouraging
+        'progress_reward': 15,         # Increased from 10 - stronger incentive to move forward
+        'wrong_direction_penalty': -0.5, # Reduced from -1 - less harsh
+        'traffic_awareness_bonus': 15, # Increased from 10 - more reward for smart behavior
+        'sequential_bonus': 75,        # Increased from 50 - more reward for sequential progress
+        'movement_bonus': 0.5,         # Small bonus for taking any movement action (encourages exploration)
+        'survival_bonus': 0.02,        # Reduced survival bonus (was 0.1) - prevents it from dominating
+        'midway_reward': 30,           # Reward for crossing center line (midway checkpoint)
+        'proximity_bonus_scale': 50,   # Bonus for getting very close to waypoint (50% distance = 25 bonus)
     },
     
     # DQN Hyperparameters - optimized for better roundabout learning

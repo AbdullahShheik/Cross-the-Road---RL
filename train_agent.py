@@ -92,8 +92,26 @@ def train_agent(
         # Record statistics
         scores.append(score)
         scores_window.append(score)
-        epsilons.append(agent.epsilon)
         episode_rewards.append(score)
+
+        # --- Exploration schedule control ------------------------------------
+        # Epsilon decays linearly from 1.0 to 0.0 over the first 50% of episodes
+        # After episode 500 (50% of 1000), epsilon stays at 0 (pure exploitation)
+        exploration_fraction = 0.5  # explore for 50% of episodes, then epsilon = 0
+        eps_start = RL_CONFIG.get('epsilon_start', 1.0)
+        eps_end = 0.0  # Exploration ends completely at 50% of episodes
+
+        if num_episodes > 0:
+            exploration_episodes = exploration_fraction * num_episodes
+            if episode <= exploration_episodes:
+                # Linear decay from eps_start to eps_end over first 50% of episodes
+                phase_progress = episode / exploration_episodes
+                agent.epsilon = eps_start - (eps_start - eps_end) * phase_progress
+            else:
+                # After 50% of episodes, epsilon stays at 0 (pure exploitation)
+                agent.epsilon = eps_end
+
+        epsilons.append(agent.epsilon)
         
         # Print progress with more detailed info
         if episode % 10 == 0:
