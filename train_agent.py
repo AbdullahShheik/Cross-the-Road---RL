@@ -18,7 +18,7 @@ from config import RL_CONFIG
 
 def train_agent(
     num_episodes=1000,
-    max_steps=1000,
+    max_steps=400,
     gui=False,
     save_dir='models',
     save_frequency=100,
@@ -57,6 +57,11 @@ def train_agent(
     epsilons = []
     episode_rewards = []
     
+    episode_waypoint_history = []
+    episode_collision_history = []
+    episode_success_history = []
+    episode_step_history = []
+
     print(f"\nStarting training for {num_episodes} episodes...")
     print(f"Initial epsilon: {agent.epsilon:.2f}")
     print(f"Device: {agent.device}")
@@ -67,6 +72,11 @@ def train_agent(
         state, info = env.reset()
         score = 0
         steps = 0
+        episode_return = 0.0
+
+        episode_waypoints = 0
+        episode_collision = False
+        episode_success = False
         
         for step in range(max_steps):
             # Select action
@@ -74,7 +84,18 @@ def train_agent(
             
             # Take step in environment
             next_state, reward, terminated, truncated, info = env.step(action)
+            
             done = terminated or truncated
+
+            if info.get("waypoints_completed"):
+                episode_waypoints = info["waypoints_completed"]
+
+            if info.get("collision"):
+                episode_collision = True
+
+            if info.get("success"):
+                episode_success = True
+                
             
             if gui:
                 time.sleep(0.05)
@@ -84,6 +105,7 @@ def train_agent(
             
             state = next_state
             score += reward
+            episode_return += reward
             steps += 1
             
             if done:
@@ -94,22 +116,34 @@ def train_agent(
         scores_window.append(score)
         episode_rewards.append(score)
 
+        episode_waypoint_history.append(episode_waypoints)
+        episode_collision_history.append(episode_collision)
+        episode_success_history.append(episode_success)
+        episode_step_history.append(steps)
+
         # --- Exploration schedule control ------------------------------------
         # Epsilon decays linearly from 1.0 to 0.0 over the first 50% of episodes
         # After episode 500 (50% of 1000), epsilon stays at 0 (pure exploitation)
-        exploration_fraction = 0.5  # explore for 50% of episodes, then epsilon = 0
-        eps_start = RL_CONFIG.get('epsilon_start', 1.0)
-        eps_end = 0.0  # Exploration ends completely at 50% of episodes
+        # exploration_fraction = 0.5  # explore for 50% of episodes, then epsilon = 0
+        # eps_start = RL_CONFIG.get('epsilon_start', 1.0)
+        # eps_end = 0.0  # Exploration ends completely at 50% of episodes
 
-        if num_episodes > 0:
-            exploration_episodes = exploration_fraction * num_episodes
-            if episode <= exploration_episodes:
-                # Linear decay from eps_start to eps_end over first 50% of episodes
-                phase_progress = episode / exploration_episodes
-                agent.epsilon = eps_start - (eps_start - eps_end) * phase_progress
-            else:
-                # After 50% of episodes, epsilon stays at 0 (pure exploitation)
-                agent.epsilon = eps_end
+        # if num_episodes > 0:
+        #     exploration_episodes = exploration_fraction * num_episodes
+        #     if episode <= exploration_episodes:
+        #         # Linear decay from eps_start to eps_end over first 50% of episodes
+        #         phase_progress = episode / exploration_episodes
+        #         agent.epsilon = eps_start - (eps_start - eps_end) * phase_progress
+        #     else:
+        #         # After 50% of episodes, epsilon stays at 0 (pure exploitation)
+        #         agent.epsilon = eps_end
+
+        epsilon_start = RL_CONFIG.get('epsilon_start', 1.0)
+        epsilon_min = RL_CONFIG.get('epsilon_min', 0.05)
+        epsilon_decay = RL_CONFIG.get('epsilon_decay', 0.995)
+
+        # Update epsilon after each episode
+        agent.epsilon = max(epsilon_min, agent.epsilon * epsilon_decay)
 
         epsilons.append(agent.epsilon)
         
@@ -117,60 +151,69 @@ def train_agent(
         if episode % 10 == 0:
             avg_score = np.mean(scores_window)
             # Get episode info for better tracking
-            waypoints = info.get('waypoints_completed', 0)
-            success = info.get('success', False)
-            collision = info.get('collision', False)
+            waypoints = episode_waypoints
+            success = episode_success
+            collision = episode_collision
+
+            if success:
+                status = "SUCCESS"
+            elif collision:
+                status = "COLLISION"
+            else:
+                status = "TIMEOUT"
             
-            status = "SUCCESS" if success else ("COLLISION" if collision else "TIMEOUT")
-            
-            print(f"Episode {episode:4d} | "
-                  f"Avg Score: {avg_score:8.2f} | "
-                  f"Score: {score:8.2f} | "
-                  f"Steps: {steps:4d} | "
-                  f"Waypoints: {waypoints} | "
-                  f"Status: {status:9s} | "
-                  f"Epsilon: {agent.epsilon:.3f} | "
-                  f"Buffer: {len(replay_buffer):5d}")
+            print(
+                f"Episode {episode:4d} | "
+                f"Score: {score:8.2f} | "
+                f"Avg100: {np.mean(scores_window):8.2f} | "
+                f"Steps: {steps:4d} | "
+                f"Waypoints: {episode_waypoints}/4 | "
+                f"Status: {status:9s} | "
+                f"Epsilon: {agent.epsilon:.3f} | "
+                f"Collision: {episode_collision} | "
+                f"Success: {episode_success} | "
+                f"Buffer: {len(replay_buffer):5d}"
+            )
         
         # Save model periodically
         if episode % save_frequency == 0:
             model_path = os.path.join(save_dir, f'dqn_model_episode_{episode}.pth')
             agent.save(model_path)
         
-        # Track success metrics for better evaluation
-        recent_successes = sum(1 for i in range(max(0, episode-20), episode) 
-                              if i < len(episode_rewards) and episode_rewards[i-1] > 0)
+        # # Track success metrics for better evaluation
+        # recent_successes = sum(1 for i in range(max(0, episode-20), episode) 
+        #                       if i < len(episode_rewards) and episode_rewards[i-1] > 0)
         
-        # Only consider solved if BOTH high score AND actual waypoint completion
-        if len(scores_window) >= 100:
-            avg_score = np.mean(scores_window)
+        # # Only consider solved if BOTH high score AND actual waypoint completion
+        # if len(scores_window) >= 100:
+        #     avg_score = np.mean(scores_window)
             
-            # Count recent episodes with waypoint completions (actual success)
-            recent_waypoint_episodes = 0
-            recent_success_episodes = 0
-            for i in range(max(0, episode-50), episode):
-                if i < len(episode_rewards):
-                    # Check if this episode had any waypoints (success indicator)
-                    # We'll consider an episode successful if score > 3000 (indicates waypoint rewards)
-                    if episode_rewards[i-1] > 3000:
-                        recent_waypoint_episodes += 1
-                    # Check for full circuit completion (very high scores)
-                    if episode_rewards[i-1] > 8000:  # Full circuit completion
-                        recent_success_episodes += 1
+        #     # Count recent episodes with waypoint completions (actual success)
+        #     recent_waypoint_episodes = 0
+        #     recent_success_episodes = 0
+        #     for i in range(max(0, episode-50), episode):
+        #         if i < len(episode_rewards):
+        #             # Check if this episode had any waypoints (success indicator)
+        #             # We'll consider an episode successful if score > 3000 (indicates waypoint rewards)
+        #             if episode_rewards[i-1] > 3000:
+        #                 recent_waypoint_episodes += 1
+        #             # Check for full circuit completion (very high scores)
+        #             if episode_rewards[i-1] > 8000:  # Full circuit completion
+        #                 recent_success_episodes += 1
             
-            waypoint_success_rate = recent_waypoint_episodes / min(50, episode) if episode > 0 else 0
-            full_circuit_rate = recent_success_episodes / min(50, episode) if episode > 0 else 0
+        #     waypoint_success_rate = recent_waypoint_episodes / min(50, episode) if episode > 0 else 0
+        #     full_circuit_rate = recent_success_episodes / min(50, episode) if episode > 0 else 0
             
-            # Very high threshold - only "solved" if consistently completing full circuits
-            if avg_score >= 8000.0 and waypoint_success_rate >= 0.6 and full_circuit_rate >= 0.3:
-                print(f"\nEnvironment truly solved in {episode} episodes!")
-                print(f"Average score: {avg_score:.2f}")
-                print(f"Waypoint success rate: {waypoint_success_rate*100:.1f}%")
-                print(f"Full circuit rate: {full_circuit_rate*100:.1f}%")
-                print("Agent consistently completing full roundabout circuits!")
-                model_path = os.path.join(save_dir, 'dqn_model_solved.pth')
-                agent.save(model_path)
-                # Continue training for even better performance
+        #     # Very high threshold - only "solved" if consistently completing full circuits
+        #     if avg_score >= 8000.0 and waypoint_success_rate >= 0.6 and full_circuit_rate >= 0.3:
+        #         print(f"\nEnvironment truly solved in {episode} episodes!")
+        #         print(f"Average score: {avg_score:.2f}")
+        #         print(f"Waypoint success rate: {waypoint_success_rate*100:.1f}%")
+        #         print(f"Full circuit rate: {full_circuit_rate*100:.1f}%")
+        #         print("Agent consistently completing full roundabout circuits!")
+        #         model_path = os.path.join(save_dir, 'dqn_model_solved.pth')
+        #         agent.save(model_path)
+        #         # Continue training for even better performance
     
     # Save final model
     final_model_path = os.path.join(save_dir, 'dqn_model_final.pth')
@@ -227,7 +270,7 @@ def plot_training_progress(scores, epsilons, save_dir):
 def main():
     """Main training function."""
     parser = argparse.ArgumentParser(description='Train DQN Agent on Crossroad Environment')
-    parser.add_argument('--episodes', type=int, default=1000, help='Number of training episodes')
+    parser.add_argument('--episodes', type=int, default=2000, help='Number of training episodes')
     parser.add_argument('--max-steps', type=int, default=1000, help='Maximum steps per episode')
     parser.add_argument('--gui', action='store_true', help='Show GUI during training (slower)')
     parser.add_argument('--save-dir', type=str, default='models', help='Directory to save models')

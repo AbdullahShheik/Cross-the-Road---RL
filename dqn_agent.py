@@ -55,8 +55,8 @@ class DQNAgent:
         Initialize an Agent object.
         
         Args:
-            state_size (int): Dimension of each state
-            action_size (int): Dimension of each action
+            state_size (int): Dimension of each state (should be 12 for collision awareness)
+            action_size (int): Dimension of each action (should be 5)
             device: PyTorch device (cuda or cpu)
         """
         self.state_size = state_size

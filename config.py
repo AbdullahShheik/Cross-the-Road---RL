@@ -108,7 +108,7 @@ PEDESTRIAN_CONFIG = {
         [-2.5, -3.5, 0.6],  # West side (cross south crosswalk)  
         [-2.5, 3.5, 0.6],   # Back to start (cross west crosswalk - complete loop)
     ],
-    'waypoint_tolerance': 1.5,  # Distance to consider waypoint reached (increased from 1.0)
+    'waypoint_tolerance': 1.5,  # Increased from 1.0 for easier waypoint detection
     'require_sequential_waypoints': True,  # Must reach waypoints in order
     'center_idle_zone': {'x': [-1.2, 1.2], 'y': [-1.2, 1.2]},
     'center_idle_penalty': -0.6,
@@ -170,45 +170,45 @@ TRAFFIC_LIGHT_CONFIG = {
 
 # RL Training Settings
 RL_CONFIG = {
-    # Enhanced state space for roundabout navigation
-    # [ped_x, ped_y, ped_vx, ped_vy, current_target_x, current_target_y, waypoint_index,
-    #  4 traffic lights (N,S,E,W), 8 cars (rel_x,rel_y,vx,vy for each)]
-    'state_space_size': 43,  # 4 + 3 + 4 + 32 = 43 total dimensions
-    'action_space_size': 5,  # 0=stay, 1=forward, 2=back, 3=left, 4=right
+    # Enhanced state space for roundabout navigation with collision awareness
+    # [ped_x, ped_y, target_x, target_y, rel1_x, rel1_y, rel2_x, rel2_y, 
+    #  ns_green, ew_green, min_car_distance, is_in_danger]
+    'state_space_size': 12,
+    'action_space_size': 5,
     
-    'max_episode_steps': 2000,  # Longer episodes for roundabout navigation
+    'max_episode_steps': 1500,  # Increased from 1000 - give more time to find safe crossing windows
     
     'reward_structure': {
-        'reach_waypoint': 150,         # Increased from 100 - makes waypoint completion more valuable
-        'reach_final_target': 1000,    # Increased from 500 - huge bonus for completing all 4
-        'collision_penalty': -80,      # Further reduced from -100 - less discouraging
-        'time_penalty': -0.005,        # Further reduced - less time pressure
-        'safe_crossing_bonus': 50,     # Bonus for crossing safely
-        'near_miss_penalty': -3,       # Further reduced from -5 - less discouraging
-        'progress_reward': 15,         # Increased from 10 - stronger incentive to move forward
-        'wrong_direction_penalty': -0.5, # Reduced from -1 - less harsh
-        'traffic_awareness_bonus': 15, # Increased from 10 - more reward for smart behavior
-        'sequential_bonus': 75,        # Increased from 50 - more reward for sequential progress
-        'movement_bonus': 0.5,         # Small bonus for taking any movement action (encourages exploration)
-        'survival_bonus': 0.02,        # Reduced survival bonus (was 0.1) - prevents it from dominating
-        'midway_reward': 30,           # Reward for crossing center line (midway checkpoint)
-        'proximity_bonus_scale': 50,   # Bonus for getting very close to waypoint (50% distance = 25 bonus)
+        'reach_waypoint': 150,
+        'reach_final_target': 1000,
+        'collision_penalty': -100,  # Reduced from -300 to prevent learned passivity
+        'time_penalty': -0.001,  # Reduced from -0.005
+        'safe_crossing_bonus': 50,
+        'near_miss_penalty': -3,
+        'progress_reward': 15,
+        'wrong_direction_penalty': -0.5,
+        'traffic_awareness_bonus': 15,
+        'sequential_bonus': 75,
+        'movement_bonus': 0.5,
+        'survival_bonus': 0.02,
+        'midway_reward': 30,
+        'proximity_bonus_scale': 50,
     },
     
-    # DQN Hyperparameters - optimized for better roundabout learning
-    'learning_rate': 0.0005,  # Slightly reduced for stability
+    # DQN Hyperparameters - balanced to encourage active exploration + movement
+    'learning_rate': 0.0005,
     'gamma': 0.99,
     'epsilon_start': 1.0,
-    'epsilon_end': 0.05,      # Keep some exploration even late in training
-    'epsilon_decay': 0.9995,  # Slower decay so agent explores longer
-    'batch_size': 128,  # Increased for more stable learning
-    'replay_buffer_size': 50000,  # Increased buffer for better experience diversity
-    'target_update_frequency': 200,  # Less frequent updates for stability
-    'train_frequency': 4,
-    'min_replay_size': 2000,  # More initial experience before training
+    'epsilon_end': 0.05,  # Increased from 0.01 - keep exploring even late
+    'epsilon_decay': 0.988,  # Slower decay = MORE exploration (was 0.992)
+    'batch_size': 256,
+    'replay_buffer_size': 100000,
+    'target_update_frequency': 100,
+    'train_frequency': 2,
+    'min_replay_size': 500,  # Reduced from 1000 - start learning MUCH earlier
     
-    # Neural Network Architecture - optimized  
-    'hidden_layers': [256, 256, 128],  # Larger network for complex roundabout behavior
+    # Neural Network Architecture
+    'hidden_layers': [256, 256, 128],
 }
 
 # Simulation Settings

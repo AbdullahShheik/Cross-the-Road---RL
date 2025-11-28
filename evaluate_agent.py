@@ -10,7 +10,7 @@ from dqn_agent import DQNAgent
 from config import RL_CONFIG
 
 
-def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=1000):
+def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=400):
     """
     Evaluate a trained DQN agent.
     
@@ -82,7 +82,7 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=1000):
             if info.get('success', False):
                 successes += 1
                 waypoints = info.get('waypoints_completed', 0)
-                print(f"  🎉 SUCCESS! Completed all {waypoints} waypoints in {steps} steps")
+                print(f"  🎉 SUCCESS! Completed all 4 waypoints in {steps} steps")
             elif info.get('collision', False):
                 collisions += 1
                 waypoints = info.get('waypoints_completed', 0)
