@@ -45,17 +45,24 @@ def train_model():
         except ValueError:
             episodes = 500
             
+        try:
+            rounds = int(input("Enter number of rounds per episode for training (default 1): ") or "1")
+        except ValueError:
+            rounds = 1
+            
         use_gui = input("Show GUI during training? (y/N): ").lower().startswith('y')
         
         print(f"\nStarting training for {episodes} episodes...")
         print(f"GUI: {'Enabled' if use_gui else 'Disabled (faster)'}")
+        print(f"Target rounds per episode: {rounds}")
         
         train_agent(
             num_episodes=episodes,
             max_steps=2000,
             gui=use_gui,
             save_dir='models',
-            save_frequency=50
+            save_frequency=100,
+            target_rounds=rounds
         )
         
         print("Training completed! Model saved in ./models/")
@@ -90,12 +97,17 @@ def run_trained_model():
         from evaluate_agent import evaluate_agent
         
         episodes = int(input("Enter number of episodes to run (default 5): ") or "5")
+        rounds = int(input("Enter number of rounds per episode (default 1): ") or "1")
+        
+        if rounds > 1:
+            print(f"\nAgent will complete {rounds} full rounds of the roundabout per episode!")
         
         results = evaluate_agent(
             model_path=model_path,
             num_episodes=episodes,
             gui=True,
-            max_steps=2000
+            max_steps=2000,
+            target_rounds=rounds
         )
         
         print("\nEvaluation completed!")

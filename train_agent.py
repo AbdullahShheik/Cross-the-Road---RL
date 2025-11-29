@@ -22,7 +22,8 @@ def train_agent(
     gui=False,
     save_dir='models',
     save_frequency=100,
-    plot=True
+    plot=True,
+    target_rounds=1
 ):
     """
     Train DQN agent on Crossroad environment.
@@ -34,17 +35,19 @@ def train_agent(
         save_dir: Directory to save models
         save_frequency: Save model every N episodes
         plot: Whether to plot training progress
+        target_rounds: Number of complete rounds per episode during training
     """
     # Create directories
     os.makedirs(save_dir, exist_ok=True)
     
     # Initialize environment
     print("Initializing environment...")
-    env = CrossroadGymEnv(gui=gui, max_steps=max_steps)
+    env = CrossroadGymEnv(gui=gui, max_steps=max_steps, target_rounds=target_rounds)
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     
     print(f"State size: {state_size}, Action size: {action_size}")
+    print(f"Target rounds per episode: {target_rounds}")
     
     # Initialize agent and replay buffer
     agent = DQNAgent(state_size, action_size)

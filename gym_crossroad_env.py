@@ -16,11 +16,12 @@ class CrossroadGymEnv(gym.Env):
     """
     metadata = {"render_modes": ["human"], "render_fps": 60}
 
-    def __init__(self, gui=False, max_steps=None, reward_shaping=True):
+    def __init__(self, gui=False, max_steps=None, reward_shaping=True, target_rounds=1):
         super().__init__()
         self.gui = gui
         self._max_steps = max_steps or RL_CONFIG.get('max_episode_steps', 2000)
         self.reward_shaping = reward_shaping
+        self.target_rounds = target_rounds
         
         self._p_connection_mode = p.GUI if gui else p.DIRECT
         self.navigation_mode = PEDESTRIAN_CONFIG.get('navigation_mode', 'roundabout')
@@ -52,6 +53,7 @@ class CrossroadGymEnv(gym.Env):
         self.current_waypoint_index = 0
         self.waypoints_reached = 0
         self.total_waypoints_reached = 0
+        self.rounds_completed = 0
         
         # Progress tracking
         self.last_progress_distance = None
@@ -65,7 +67,9 @@ class CrossroadGymEnv(gym.Env):
             'total_reward': 0,
             'waypoints_reached': 0,
             'full_loops_completed': 0,
-            'sequential_completions': 0
+            'sequential_completions': 0,
+            'target_rounds': self.target_rounds,
+            'rounds_completed': 0
         }
 
     def _init_pybullet(self):
@@ -100,10 +104,11 @@ class CrossroadGymEnv(gym.Env):
             self._configure_navigation_plan()
         self.current_waypoint_index = 0
         self.waypoints_reached = 0
+        self.rounds_completed = 0
         if self.waypoints:
             self.current_target_pos = self.waypoints[0]
         else:
-            self.current_target_pos = self.start_pos
+            self.current_target_pos = PEDESTRIAN_CONFIG.get('start_position', [-2.5, 3.5, 0.6])
         self.last_progress_distance = math.hypot(
             self.start_pos[0] - self.current_target_pos[0],
             self.start_pos[1] - self.current_target_pos[1]
@@ -261,12 +266,40 @@ class CrossroadGymEnv(gym.Env):
             self.current_waypoint_index += 1
             self.waypoints_reached += 1
 
-            # If all waypoints completed → SUCCESS
+            # If all waypoints completed → Check if more rounds needed
             if self.current_waypoint_index >= len(self.waypoints):
-                reward += 400  # Large bonus for completing full circuit (was 500)
-                info["success"] = True
-                info["waypoints_completed"] = len(self.waypoints)  # Ensure correct count
-                done = True
+                self.rounds_completed += 1
+                self.episode_stats['rounds_completed'] = self.rounds_completed
+                
+                # Calculate total waypoints completed across all rounds
+                total_waypoints_completed = self.rounds_completed * len(self.waypoints)
+                
+                # Check if target rounds completed
+                if self.rounds_completed >= self.target_rounds:
+                    reward += 400  # Large bonus for completing all target rounds
+                    info["success"] = True
+                    info["waypoints_completed"] = total_waypoints_completed
+                    info["rounds_completed"] = self.rounds_completed
+                    info["target_rounds_reached"] = True
+                    print(f"🎉 Agent completed {self.rounds_completed}/{self.target_rounds} rounds successfully!")
+                    done = True
+                else:
+                    # More rounds needed - reset waypoints but continue episode
+                    reward += 200  # Moderate bonus for completing one round
+                    info["round_completed"] = self.rounds_completed
+                    info["waypoints_completed"] = total_waypoints_completed
+                    info["rounds_completed"] = self.rounds_completed
+                    print(f"🔄 Round {self.rounds_completed} completed! Starting round {self.rounds_completed + 1}/{self.target_rounds}")
+                    
+                    # Reset waypoint tracking for next round
+                    self.current_waypoint_index = 0
+                    self.current_target_pos = self.waypoints[0]
+                    
+                    # Reset progress measurement for new round
+                    self.last_distance_to_target = math.hypot(
+                        agent_x - self.current_target_pos[0],
+                        agent_y - self.current_target_pos[1]
+                    )
             else:
                 # Move to next waypoint
                 self.current_target_pos = self.waypoints[self.current_waypoint_index]
@@ -390,9 +423,11 @@ class CrossroadGymEnv(gym.Env):
 
         # Calculate reward and check termination
         info = {
-            'waypoints_completed': self.waypoints_reached,
+            'waypoints_completed': self.rounds_completed * len(self.waypoints) + self.current_waypoint_index,
             'current_waypoint': self.current_waypoint_index,
-            'total_waypoints': len(self.waypoints)
+            'total_waypoints': len(self.waypoints),
+            'rounds_completed': self.rounds_completed,
+            'target_rounds': self.target_rounds
         }
         
         reward, done, info = self._calculate_reward(action, info)
@@ -451,7 +486,9 @@ class CrossroadGymEnv(gym.Env):
         info = {
             'current_waypoint': self.current_waypoint_index, 
             'waypoints_reached': self.waypoints_reached,
-            'target_position': self.current_target_pos
+            'target_position': self.current_target_pos,
+            'rounds_completed': self.rounds_completed,
+            'target_rounds': self.target_rounds
         }
         
         return obs, info
@@ -474,7 +511,10 @@ class CrossroadGymEnv(gym.Env):
         stats.update({
             'current_waypoint': self.current_waypoint_index,
             'waypoints_reached_current_episode': self.waypoints_reached,
-            'completion_percentage': (self.waypoints_reached / len(self.waypoints)) * 100
+            'completion_percentage': (self.waypoints_reached / len(self.waypoints)) * 100,
+            'rounds_completed': self.rounds_completed,
+            'target_rounds': self.target_rounds,
+            'rounds_completion_percentage': (self.rounds_completed / self.target_rounds) * 100
         })
         return stats
 

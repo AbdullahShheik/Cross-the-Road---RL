@@ -10,7 +10,7 @@ from dqn_agent import DQNAgent
 from config import RL_CONFIG
 
 
-def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=400):
+def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=400, target_rounds=1):
     """
     Evaluate a trained DQN agent.
     
@@ -19,15 +19,17 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=400):
         num_episodes: Number of episodes to evaluate
         gui: Whether to show GUI
         max_steps: Maximum steps per episode
+        target_rounds: Number of complete rounds the agent should do per episode
     """
     # Initialize environment
     print("Initializing environment...")
     if gui:
         print("  GUI mode enabled - PyBullet window should open...")
-    env = CrossroadGymEnv(gui=gui, max_steps=max_steps)
+    env = CrossroadGymEnv(gui=gui, max_steps=max_steps, target_rounds=target_rounds)
     state_size = env.observation_space.shape[0]
     action_size = env.action_space.n
     print(f"  Environment initialized: State size={state_size}, Action size={action_size}")
+    print(f"  Target rounds per episode: {target_rounds}")
     
     # Initialize agent and load model
     print(f"Loading model from {model_path}...")
@@ -54,6 +56,8 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=400):
         
         print(f"\nEpisode {episode}/{num_episodes}")
         waypoints_logged = set()  # Track which waypoints we've logged
+        rounds_logged = set()     # Track which rounds we've logged
+        total_waypoints = len(env.waypoints) * target_rounds
         
         while not done and steps < max_steps:
             # Select action (no exploration)
@@ -74,35 +78,48 @@ def evaluate_agent(model_path, num_episodes=10, gui=True, max_steps=400):
             
             # Check for waypoint completion and log it
             waypoints = info.get('waypoints_completed', 0)
-            if waypoints not in waypoints_logged and waypoints > 0:
-                waypoints_logged.add(waypoints)
-                print(f"  ✓ Reached waypoint {waypoints}/4 at step {steps}")
+            rounds_completed = info.get('rounds_completed', 0)
+            current_waypoint = info.get('current_waypoint', 0)
+            
+            # Log round completions
+            if rounds_completed not in rounds_logged and rounds_completed > 0:
+                rounds_logged.add(rounds_completed)
+                print(f"  🔄 Completed round {rounds_completed}/{target_rounds} at step {steps}")
+            
+            # Log waypoint progress - use unique waypoint identifier
+            waypoint_key = f"r{rounds_completed}w{current_waypoint}"
+            if current_waypoint > 0 and waypoint_key not in waypoints_logged:
+                waypoints_logged.add(waypoint_key)
+                round_num = rounds_completed + 1
+                print(f"  ✓ Round {round_num}: Reached waypoint {current_waypoint}/{len(env.waypoints)} at step {steps}")
             
             # Check for success or collision
             if info.get('success', False):
                 successes += 1
-                waypoints = info.get('waypoints_completed', 0)
-                print(f"  🎉 SUCCESS! Completed all 4 waypoints in {steps} steps")
+                print(f"  🎉 SUCCESS! Completed all {target_rounds} rounds ({waypoints} waypoints) in {steps} steps")
             elif info.get('collision', False):
                 collisions += 1
-                waypoints = info.get('waypoints_completed', 0)
+                rounds_completed = info.get('rounds_completed', 0)
                 print(f"  ✗ Collision at step {steps}")
-                print(f"    Final waypoints reached: {waypoints}/4")
+                print(f"    Progress: {rounds_completed}/{target_rounds} rounds completed")
             elif done and steps >= max_steps:
-                waypoints = info.get('waypoints_completed', 0)
+                rounds_completed = info.get('rounds_completed', 0)
                 print(f"  ⏱️ Timeout after {steps} steps")
-                print(f"    Final waypoints reached: {waypoints}/4")
+                print(f"    Progress: {rounds_completed}/{target_rounds} rounds completed")
             
             # Print current waypoint target every 100 steps
             if steps % 100 == 0 or done:
                 if 'current_waypoint' in info:
                     wp_idx = info['current_waypoint']
+                    rounds_completed = info.get('rounds_completed', 0)
+                    current_round = rounds_completed + 1
                     waypoint_names = ['North→East (1)', 'East→South (2)', 'South→West (3)', 'West→North (4)']
                     if wp_idx < len(waypoint_names):
                         target_name = waypoint_names[wp_idx]
                     else:
                         target_name = f"Waypoint {wp_idx+1}"
-                    print(f"    Step {steps}: Target={target_name}, Completed={waypoints}/4")
+                    total_completed_waypoints = info.get('waypoints_completed', 0)
+                    print(f"    Step {steps}: Round {current_round}/{target_rounds}, Target={target_name}, Total waypoints completed={total_completed_waypoints}/{total_waypoints}")
         
         episode_scores.append(score)
         episode_steps.append(steps)
@@ -143,6 +160,7 @@ def main():
     parser.add_argument('--episodes', type=int, default=10, help='Number of evaluation episodes')
     parser.add_argument('--no-gui', action='store_true', help='Disable GUI (faster evaluation)')
     parser.add_argument('--max-steps', type=int, default=1000, help='Maximum steps per episode')
+    parser.add_argument('--target-rounds', type=int, default=1, help='Number of complete rounds per episode')
     
     args = parser.parse_args()
     
@@ -150,7 +168,8 @@ def main():
         model_path=args.model,
         num_episodes=args.episodes,
         gui=not args.no_gui,
-        max_steps=args.max_steps
+        max_steps=args.max_steps,
+        target_rounds=args.target_rounds
     )
 
 
