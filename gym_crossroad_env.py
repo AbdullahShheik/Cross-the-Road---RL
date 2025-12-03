@@ -48,6 +48,9 @@ class CrossroadGymEnv(gym.Env):
         self.step_count = 0
         self.last_distance_to_target = None
         self.collision_detected = False
+        # Zebra/crosswalk tracking
+        self.last_zebra_distance = None
+        self.steps_since_zebra_progress = 0
         
         # Roundabout/Sequential navigation state
         self.current_waypoint_index = 0
@@ -254,6 +257,53 @@ class CrossroadGymEnv(gym.Env):
         elif min_car_distance > 2.5:
             reward += 0.05  # Reduced from 0.2
 
+        # ---- 3b. ZEBRA / CROSSWALK SHAPING ----
+        # Encourage the agent to find and use zebra crossings when in the
+        # center intersection. If the agent is in the intersection and not on
+        # a zebra, give a small penalty but a shaping reward for progress
+        # toward the nearest zebra so it keeps moving to find one.
+        zebra_half_width = 1.8
+        intersection_center_size = 3.5
+        in_center = abs(agent_x) < intersection_center_size and abs(agent_y) < intersection_center_size
+        on_zebra = self._is_on_zebra(agent_pos)
+
+        if in_center:
+            if on_zebra:
+                # Reward staying on the zebra (keeps agent aligned while crossing)
+                reward += 0.5
+                reward += 0.02  # tiny survival/movement bonus while on zebra
+                # Clear zebra progress tracking
+                self.last_zebra_distance = None
+                self.steps_since_zebra_progress = 0
+            else:
+                # Off-zebra in center: encourage movement toward zebra, penalize idling
+                reward -= 0.20
+                if action == 0:
+                    reward -= 0.5
+
+                # Shaped reward: progress toward nearest zebra
+                dist_to_zebra = self._distance_to_nearest_zebra(agent_pos)
+                if self.last_zebra_distance is None:
+                    self.last_zebra_distance = dist_to_zebra
+                    self.steps_since_zebra_progress = 0
+                else:
+                    dz = self.last_zebra_distance - dist_to_zebra
+                    # Positive dz => getting closer to a zebra
+                    reward += dz * 6.0
+                    if dz > 0:
+                        self.steps_since_zebra_progress = 0
+                    else:
+                        self.steps_since_zebra_progress += 1
+                    self.last_zebra_distance = dist_to_zebra
+
+                # If no zebra progress for many steps, add a penalty to force turning
+                if self.steps_since_zebra_progress > 8:
+                    reward -= 0.2
+        else:
+            # Reset zebra tracking when outside center
+            self.last_zebra_distance = None
+            self.steps_since_zebra_progress = 0
+
         # ---- 4. WAYPOINT REACHED ----
         tolerance = PEDESTRIAN_CONFIG.get('waypoint_tolerance', 1.5)
         reached = dist_to_target < tolerance
@@ -342,6 +392,58 @@ class CrossroadGymEnv(gym.Env):
         
         return min_dist
 
+    def _is_on_zebra(self, pos):
+        """Return the zebra crossing name if `pos` is within a zebra area, else None.
+
+        Crosswalks are defined at x or y ~= +/-3.5 (see `config.py`). We use
+        a small band (`zebra_band_half`) around those lines and a half-width
+        (`zebra_half_width`) for the zebra width.
+        """
+        zebra_half_width = 1.8
+        zebra_band_half = 1.2
+        x, y = pos[0], pos[1]
+
+        # North
+        if (3.5 - zebra_band_half) <= y <= (3.5 + zebra_band_half) and abs(x) <= zebra_half_width:
+            return 'north'
+        # South
+        if (-3.5 - zebra_band_half) <= y <= (-3.5 + zebra_band_half) and abs(x) <= zebra_half_width:
+            return 'south'
+        # East
+        if (3.5 - zebra_band_half) <= x <= (3.5 + zebra_band_half) and abs(y) <= zebra_half_width:
+            return 'east'
+        # West
+        if (-3.5 - zebra_band_half) <= x <= (-3.5 + zebra_band_half) and abs(y) <= zebra_half_width:
+            return 'west'
+
+        return None
+
+    def _distance_to_nearest_zebra(self, pos):
+        """Compute Euclidean distance from `pos` to the nearest point on any zebra crossing."""
+        zebra_half_width = 1.8
+        x, y = pos[0], pos[1]
+        candidates = []
+
+        # North zebra (y = 3.5) — project x into zebra half width
+        nx = np.clip(x, -zebra_half_width, zebra_half_width)
+        candidates.append(((nx, 3.5), math.hypot(x - nx, y - 3.5)))
+
+        # South zebra (y = -3.5)
+        sx = np.clip(x, -zebra_half_width, zebra_half_width)
+        candidates.append(((sx, -3.5), math.hypot(x - sx, y + 3.5)))
+
+        # East zebra (x = 3.5)
+        ey = np.clip(y, -zebra_half_width, zebra_half_width)
+        candidates.append(((3.5, ey), math.hypot(x - 3.5, y - ey)))
+
+        # West zebra (x = -3.5)
+        wy = np.clip(y, -zebra_half_width, zebra_half_width)
+        candidates.append(((-3.5, wy), math.hypot(x + 3.5, y - wy)))
+
+        # Return minimum distance
+        dists = [c[1] for c in candidates]
+        return min(dists) if dists else float('inf')
+
     def step(self, action):
         """Execute action and return next state."""
         # Map action to movement
@@ -369,39 +471,16 @@ class CrossroadGymEnv(gym.Env):
         # Check if agent is in the center intersection area
         in_center = abs(new_pos[0]) < intersection_center_size and abs(new_pos[1]) < intersection_center_size
         
-        # if in_center:
-            # In center intersection - must stay on one of the zebra crossing paths
-            # Check which crossing path the agent is closest to
-            # dist_to_north = abs(new_pos[1] - 3.5)
-            # dist_to_south = abs(new_pos[1] + 3.5)
-            # dist_to_east = abs(new_pos[0] - 3.5)
-            # dist_to_west = abs(new_pos[0] + 3.5)
-            
-            # min_dist = min(dist_to_north, dist_to_south, dist_to_east, dist_to_west)
-            
-            # # Force agent onto the nearest zebra crossing path
-            # if min_dist == dist_to_north or min_dist == dist_to_south:
-            #     # On North/South path - constrain x to zebra width
-            #     new_pos[0] = np.clip(new_pos[0], -zebra_half_width, zebra_half_width)
-            # elif min_dist == dist_to_east or min_dist == dist_to_west:
-            #     # On East/West path - constrain y to zebra width
-            #     new_pos[1] = np.clip(new_pos[1], -zebra_half_width, zebra_half_width)
-        
-        # # North/South zebra crossings - constrain x when in crossing band
-        # if (3.5 - zebra_band_half) <= new_pos[1] <= (3.5 + zebra_band_half):
-        #     # In north crosswalk - must stay within zebra width
-        #     new_pos[0] = np.clip(new_pos[0], -zebra_half_width, zebra_half_width)
-        # elif (-3.5 - zebra_band_half) <= new_pos[1] <= (-3.5 + zebra_band_half):
-        #     # In south crosswalk - must stay within zebra width
-        #     new_pos[0] = np.clip(new_pos[0], -zebra_half_width, zebra_half_width)
-        
-        # # East/West zebra crossings - constrain y when in crossing band
-        # if (3.5 - zebra_band_half) <= new_pos[0] <= (3.5 + zebra_band_half):
-        #     # In east crosswalk - must stay within zebra width
-        #     new_pos[1] = np.clip(new_pos[1], -zebra_half_width, zebra_half_width)
-        # elif (-3.5 - zebra_band_half) <= new_pos[0] <= (-3.5 + zebra_band_half):
-        #     # In west crosswalk - must stay within zebra width
-        #     new_pos[1] = np.clip(new_pos[1], -zebra_half_width, zebra_half_width)
+        # If agent is on a zebra crossing, constrain the perpendicular
+        # coordinate so the agent stays within the zebra band while
+        # crossing. If in the center but off-zebra, do not force movement
+        # but reward shaping will encourage finding the zebra.
+        crossing = self._is_on_zebra(new_pos)
+        if crossing is not None:
+            if crossing in ('north', 'south'):
+                new_pos[0] = np.clip(new_pos[0], -zebra_half_width, zebra_half_width)
+            else:
+                new_pos[1] = np.clip(new_pos[1], -zebra_half_width, zebra_half_width)
         
         # Boundary constraints (keep pedestrian in reasonable area)
         new_pos[0] = np.clip(new_pos[0], -5.0, 5.0)
