@@ -179,20 +179,24 @@ RL_CONFIG = {
     'max_episode_steps': 1500,  # Increased from 1000 - give more time to find safe crossing windows
     
     'reward_structure': {
-        'reach_waypoint': 150,
-        'reach_final_target': 1000,
-        'collision_penalty': -100,  # Reduced from -300 to prevent learned passivity
-        'time_penalty': -0.001,  # Reduced from -0.005
-        'safe_crossing_bonus': 50,
-        'near_miss_penalty': -3,
-        'progress_reward': 15,
-        'wrong_direction_penalty': -0.5,
-        'traffic_awareness_bonus': 15,
-        'sequential_bonus': 75,
-        'movement_bonus': 0.5,
-        'survival_bonus': 0.02,
-        'midway_reward': 30,
-        'proximity_bonus_scale': 50,
+        'reach_waypoint': 80,                # Reward for each waypoint reached
+        'reach_final_target': 400,           # Reward for completing a full round
+        'round_bonus': 200,                  # Bonus when finishing a round but more rounds remain
+        'collision_penalty': -100,           # Penalty for collisions
+        'time_penalty': -0.001,              # Small per-step time penalty
+
+        'safe_crossing_bonus_far': 0.10,     # Per-step bonus when far from cars
+        'safe_crossing_bonus_mod': 0.05,     # Per-step bonus when moderately far
+
+        'progress_reward': 8.0,              # Multiplier for progress toward current waypoint
+        'wrong_direction_penalty': -0.01,    # Small penalty for moving away from target when safe
+        'movement_bonus': 0.01,              # Tiny reward for taking an action (prevents standing still)
+        
+        'zebra_on_bonus': 0.5,                # Reward for staying on a zebra crossing
+        'zebra_survival_bonus': 0.02,         # Small extra while on zebra
+        'zebra_off_penalty': -0.20,           # Penalty when off-zebra in center
+        'zebra_idle_penalty': -0.50,          # Extra penalty for idling off-zebra
+        'zebra_progress_multiplier': 6.0,     # Multiplier for progress toward nearest zebra
     },
     
     # DQN Hyperparameters - balanced to encourage active exploration + movement

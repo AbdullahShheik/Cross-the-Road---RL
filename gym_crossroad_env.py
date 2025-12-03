@@ -214,6 +214,19 @@ class CrossroadGymEnv(gym.Env):
         reward = 0.0
         done = False
 
+        # Load reward parameters from config
+        reward_struct = RL_CONFIG.get('reward_structure', {})
+        collision_penalty = reward_struct.get('collision_penalty', -100)
+        progress_multiplier = reward_struct.get('progress_reward', 8.0)
+        safe_far = reward_struct.get('safe_crossing_bonus_far', 0.10)
+        safe_mod = reward_struct.get('safe_crossing_bonus_mod', 0.05)
+        waypoint_reward = reward_struct.get('reach_waypoint', 80)
+        round_completion_reward = reward_struct.get('reach_final_target', 400)
+        round_bonus = reward_struct.get('round_bonus', 200)
+        time_penalty = reward_struct.get('time_penalty', -0.001)
+        wrong_dir_penalty = reward_struct.get('wrong_direction_penalty', -0.01)
+        movement_bonus = reward_struct.get('movement_bonus', 0.01)
+
         # Get current position and car distance
         agent_pos, _ = p.getBasePositionAndOrientation(self.ped_body_id)
         agent_x, agent_y = agent_pos[0], agent_pos[1]
@@ -221,7 +234,7 @@ class CrossroadGymEnv(gym.Env):
 
         # ---- 1. COLLISION CHECK ----
         if self._check_collision():
-            reward = -100  # Moderate penalty (was -300, which caused passivity)
+            reward = collision_penalty
             info["collision"] = True
             return reward, True, info
 
@@ -235,15 +248,13 @@ class CrossroadGymEnv(gym.Env):
         if self.last_distance_to_target is not None:
             prev_dist = self.last_distance_to_target
             progress = prev_dist - dist_to_target
-            
-            # Strong positive reward for moving toward target
-            # This is the PRIMARY learning signal
-            reward += progress * 8.0  # Increased multiplier (was 5.0)
-            
-            # Penalty for moving away from target (slight)
+
+            # Strong positive reward for moving toward target (primary signal)
+            reward += progress * progress_multiplier
+
+            # Penalty for moving away from target (slight) when not near a car
             if progress < 0 and min_car_distance > 2.5:
-                # Only penalize bad direction if NOT near a car
-                reward -= 0.01
+                reward += wrong_dir_penalty
         else:
             self.last_distance_to_target = dist_to_target
 
@@ -253,9 +264,9 @@ class CrossroadGymEnv(gym.Env):
         # ---- 3. SAFETY BONUS (SECONDARY) ----
         # Small bonus for being cautious, but don't over-reward passivity
         if min_car_distance > 4.0:
-            reward += 0.1  # Reduced from 0.5
+            reward += safe_far
         elif min_car_distance > 2.5:
-            reward += 0.05  # Reduced from 0.2
+            reward += safe_mod
 
         # ---- 3b. ZEBRA / CROSSWALK SHAPING ----
         # Encourage the agent to find and use zebra crossings when in the
@@ -270,16 +281,16 @@ class CrossroadGymEnv(gym.Env):
         if in_center:
             if on_zebra:
                 # Reward staying on the zebra (keeps agent aligned while crossing)
-                reward += 0.5
-                reward += 0.02  # tiny survival/movement bonus while on zebra
+                reward += reward_struct.get('zebra_on_bonus', 0.5)
+                reward += reward_struct.get('zebra_survival_bonus', 0.02)
                 # Clear zebra progress tracking
                 self.last_zebra_distance = None
                 self.steps_since_zebra_progress = 0
             else:
                 # Off-zebra in center: encourage movement toward zebra, penalize idling
-                reward -= 0.20
+                reward += reward_struct.get('zebra_off_penalty', -0.20)
                 if action == 0:
-                    reward -= 0.5
+                    reward += reward_struct.get('zebra_idle_penalty', -0.5)
 
                 # Shaped reward: progress toward nearest zebra
                 dist_to_zebra = self._distance_to_nearest_zebra(agent_pos)
@@ -289,7 +300,7 @@ class CrossroadGymEnv(gym.Env):
                 else:
                     dz = self.last_zebra_distance - dist_to_zebra
                     # Positive dz => getting closer to a zebra
-                    reward += dz * 6.0
+                    reward += dz * reward_struct.get('zebra_progress_multiplier', 6.0)
                     if dz > 0:
                         self.steps_since_zebra_progress = 0
                     else:
@@ -298,7 +309,7 @@ class CrossroadGymEnv(gym.Env):
 
                 # If no zebra progress for many steps, add a penalty to force turning
                 if self.steps_since_zebra_progress > 8:
-                    reward -= 0.2
+                    reward += reward_struct.get('zebra_off_penalty', -0.2)
         else:
             # Reset zebra tracking when outside center
             self.last_zebra_distance = None
@@ -310,7 +321,7 @@ class CrossroadGymEnv(gym.Env):
 
         if reached:
             # Significant reward for reaching waypoint
-            reward += 80  # Reduced from 100 (relative to progress signal)
+            reward += waypoint_reward
             info["waypoint_reached"] = self.current_waypoint_index
 
             self.current_waypoint_index += 1
@@ -326,7 +337,7 @@ class CrossroadGymEnv(gym.Env):
                 
                 # Check if target rounds completed
                 if self.rounds_completed >= self.target_rounds:
-                    reward += 400  # Large bonus for completing all target rounds
+                    reward += round_completion_reward  # Large bonus for completing all target rounds
                     info["success"] = True
                     info["waypoints_completed"] = total_waypoints_completed
                     info["rounds_completed"] = self.rounds_completed
@@ -335,7 +346,7 @@ class CrossroadGymEnv(gym.Env):
                     done = True
                 else:
                     # More rounds needed - reset waypoints but continue episode
-                    reward += 200  # Moderate bonus for completing one round
+                    reward += round_bonus  # Moderate bonus for completing one round
                     info["round_completed"] = self.rounds_completed
                     info["waypoints_completed"] = total_waypoints_completed
                     info["rounds_completed"] = self.rounds_completed
